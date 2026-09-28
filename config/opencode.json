@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ollama/qwen3:8b",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local)",
+      "options": {
+        "baseURL": "http://localhost:11434/v1"
+      },
+      "models": {
+        "qwen3:8b": {
+          "name": "Qwen3 8B (small, fits in VRAM)",
+          "limit": { "context": 32768, "output": 8192 }
+        },
+        "gpt-oss:20b": {
+          "name": "gpt-oss 20B (medium, partly CPU)",
+          "limit": { "context": 32768, "output": 8192 }
+        },
+        "qwen3-coder:30b": {
+          "name": "Qwen3-Coder 30B-A3B (large, mostly CPU)",
+          "limit": { "context": 32768, "output": 8192 }
+        }
+      }
+    }
+  }
+}
