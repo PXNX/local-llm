@@ -87,6 +87,7 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   | qwen3:8b | ~5 GB | fits almost entirely on the GPU, fast (default) |
   | gpt-oss:20b | ~13 GB | GPU + CPU, usable |
   | qwen3-coder:30b | ~19 GB | MoE, mostly CPU/RAM, slow, pushes RAM to the limit |
+  | qwen3.8-blend:27b | ~12.6 GB | [JetBrains Qwen3.8/3.6 27B blend](https://huggingface.co/collections/JetBrains/qwen38-36-27b-blend), IQ3_S from `hf.co/JetBrains/Qwen3.8-3.6-27B-blend-GGUF:IQ3_S`. Dense 27B, strongest coder here but slowest (~1-3 tokens/s, mostly CPU). Q4_K_M (16.8 GB) does not fit in 16 GB RAM |
 - **OpenCode** (winget `SST.opencode`), config: `%USERPROFILE%\.config\opencode\opencode.json`
   (provider `ollama`, OpenAI-compatible endpoint `/v1`).
 - **T3 Code**: OpenCode provider enabled with binaryPath (`providerInstances.opencode`) in
