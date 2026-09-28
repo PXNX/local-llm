@@ -1,0 +1,13 @@
+# Installed by setup.bat (ComfyUI portable incl. Python, custom nodes and models, many GB)
+ComfyUI_windows_portable/
+*.7z
+
+# Downloads / logs
+download-models.log
+*.done
+
+# Sticker output
+stickers/out/
+
+__pycache__/
+*.pyc

@@ -1,0 +1,45 @@
+@echo off
+rem Setup after cloning: installs Ollama + OpenCode, ComfyUI portable (+ GGUF node, rembg)
+rem and the OpenCode config. Safe to re-run. Models are downloaded afterwards by 0-download-all.bat.
+setlocal
+cd /d "%~dp0"
+set "COMFY_VER=v0.37.0"
+set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
+
+echo === Ollama + OpenCode (winget)
+winget list --id Ollama.Ollama -e >nul 2>&1 || winget install --id Ollama.Ollama -e --silent --accept-package-agreements --accept-source-agreements
+winget list --id SST.opencode -e >nul 2>&1 || winget install --id SST.opencode -e --silent --accept-package-agreements --accept-source-agreements
+
+rem Large context with little VRAM (applies after Ollama restarts)
+setx OLLAMA_CONTEXT_LENGTH 32768 >nul
+setx OLLAMA_FLASH_ATTENTION 1 >nul
+setx OLLAMA_KV_CACHE_TYPE q8_0 >nul
+
+echo === OpenCode config
+if not exist "%USERPROFILE%\.config\opencode\opencode.json" (
+  mkdir "%USERPROFILE%\.config\opencode" 2>nul
+  copy "%~dp0config\opencode.json" "%USERPROFILE%\.config\opencode\opencode.json" >nul
+  echo Installed %USERPROFILE%\.config\opencode\opencode.json
+) else (
+  echo Exists already, not overwritten. Template: config\opencode.json
+)
+
+echo === ComfyUI portable %COMFY_VER% (~2 GB)
+if not exist "%PY%" (
+  curl.exe -L --fail -C - --retry 5 -o ComfyUI_windows_portable_nvidia.7z https://github.com/Comfy-Org/ComfyUI/releases/download/%COMFY_VER%/ComfyUI_windows_portable_nvidia.7z || ( echo Download failed, re-run setup.bat. & pause & exit /b 1 )
+  "%SystemRoot%\System32\tar.exe" -xf ComfyUI_windows_portable_nvidia.7z || ( echo Extract failed. & pause & exit /b 1 )
+  del ComfyUI_windows_portable_nvidia.7z
+)
+
+echo === ComfyUI-GGUF node + sticker dependencies
+if not exist "ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF" (
+  git clone --depth 1 https://github.com/city96/ComfyUI-GGUF ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF
+)
+"%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]"
+
+echo.
+echo Done. Next steps:
+echo   1. Update the NVIDIA driver to ^>= 580 (needed by ComfyUI, see README).
+echo   2. Run 0-download-all.bat to download the models.
+echo   3. T3 Code: Settings ^> Providers ^> OpenCode, enable it.
+pause

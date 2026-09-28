@@ -1,0 +1,51 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "DreamShaperXL_Turbo_v2_1.safetensors" }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "sticker_input.png" }
+  },
+  "3": {
+    "class_type": "VAEEncode",
+    "inputs": { "pixels": ["2", 0], "vae": ["1", 2] }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "die-cut sticker illustration of SUBJECT, cartoon style, bold clean outlines, vibrant flat colors, cute, expressive, centered, plain white background"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["1", 1],
+      "text": "text, letters, watermark, signature, blurry, lowres, photo, realistic, busy background, frame, cropped"
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["4", 0],
+      "negative": ["5", 0],
+      "latent_image": ["3", 0],
+      "seed": 0,
+      "steps": 8,
+      "cfg": 2.0,
+      "sampler_name": "dpmpp_sde",
+      "scheduler": "karras",
+      "denoise": 0.55
+    }
+  },
+  "7": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["6", 0], "vae": ["1", 2] }
+  },
+  "8": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["7", 0], "filename_prefix": "sticker/stylized" }
+  }
+}
