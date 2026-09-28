@@ -11,15 +11,31 @@
       "models": {
         "qwen3:8b": {
           "name": "Qwen3 8B (small, fits in VRAM)",
-          "limit": { "context": 32768, "output": 8192 }
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
         },
         "gpt-oss:20b": {
           "name": "gpt-oss 20B (medium, partly CPU)",
-          "limit": { "context": 32768, "output": 8192 }
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
         },
         "qwen3-coder:30b": {
           "name": "Qwen3-Coder 30B-A3B (large, mostly CPU)",
-          "limit": { "context": 32768, "output": 8192 }
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "qwen3.8-blend:27b": {
+          "name": "JetBrains Qwen3.8/3.6 27B blend IQ3_S (large, dense, slow)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
         }
       }
     }
