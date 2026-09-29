@@ -1,9 +1,11 @@
 @echo off
-rem Flow 2: image -> transparent WebP stickers with funny text.
+rem Flow 2: image -> transparent WebP stickers with short reaction text (Hi there!, Nope, ...).
 rem   Drag & drop an image onto this file, or double-click it and pick an image.
 rem   Extra options are passed through, e.g.:
 rem     2-stickers.bat photo.jpg --count 5 --lang German
 rem     2-stickers.bat photo.jpg --text "Monday mood" --no-stylize
+rem     2-stickers.bat photo.jpg --engine photomaker   (better resemblance to the photo, needs
+rem                                                      models\photomaker\photomaker-v2.bin)
 setlocal
 cd /d "%~dp0"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
