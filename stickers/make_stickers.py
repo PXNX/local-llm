@@ -39,7 +39,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
+from scipy import ndimage
 
 HERE = Path(__file__).resolve().parent
 COMFY_DIR = HERE.parent / "ComfyUI_windows_portable" / "ComfyUI"
@@ -183,7 +185,14 @@ def cut_out(img):
     if _session is None:
         _session = new_session("isnet-general-use")
     rgba = remove(img.convert("RGB"), session=_session)
-    bbox = rgba.getchannel("A").point(lambda v: 255 if v > 16 else 0).getbbox()
+    mask = np.array(rgba.getchannel("A")) > 16
+    labeled, n = ndimage.label(mask)
+    if n > 1:
+        # rembg sometimes leaves a disconnected scrap of background - keep only the main subject
+        sizes = ndimage.sum(mask, labeled, range(1, n + 1))
+        mask = labeled == (np.argmax(sizes) + 1)
+        rgba.putalpha(Image.fromarray(np.where(mask, np.array(rgba.getchannel("A")), 0).astype(np.uint8)))
+    bbox = Image.fromarray(mask).getbbox()
     return rgba.crop(bbox) if bbox else rgba
 
 
