@@ -21,6 +21,8 @@ The OpenCode config template is `config/opencode.json`.
 | `1-image-video-comfyui.bat` | Frees VRAM (stops Ollama models), starts ComfyUI, opens the browser |
 | `2-stickers.bat` | Image -> 3 transparent WebP stickers with funny text. Drag & drop an image onto it or double-click and pick one. Starts Ollama + ComfyUI automatically. Result: `stickers\out\` |
 | `3-coding-llm-t3code.bat` | Starts Ollama, preloads `qwen3:8b` and opens T3 Code. `3-coding-llm-t3code.bat gpt-oss:20b` for a different model, `... qwen3:8b cli` for OpenCode in the terminal |
+| `4-vectorize.bat` | PNG/JPG -> SVG vector trace (like vectorizer.ai / Vector Magic). Drag & drop an image onto it or double-click and pick one. Fully local (`vtracer`), no Ollama/ComfyUI needed. Result: an `.svg` next to the input image |
+| `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line. Fully local (numpy/scipy synthesis), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different caption and variant)
@@ -32,6 +34,29 @@ The OpenCode config template is `config/opencode.json`.
 Pipeline: `qwen3-vl:4b` (Ollama) describes the image and writes captions, then ComfyUI SDXL
 img2img (`stickers/sticker_workflow_api.json`, can also be dragged into ComfyUI) makes a cartoon sticker version,
 then rembg removes the background, then white outline + Impact text, then 512x512 WebP < 100 KB (WhatsApp/Telegram).
+
+### Vectorize options (`4-vectorize.bat photo.jpg [options]`)
+- `--style photo` smooth curves for photos/gradients (default), `logo` crisp flat-color shapes, `sketch` preserves fine detail/lines
+- `--mode color` full color (default), `bw` black & white silhouette
+- `--out out.svg` output path (default: alongside the input, same name with `.svg`)
+
+Pipeline: `vtracer` (Rust, pip-installed into ComfyUI's embedded Python) traces color regions and
+fits curves/polygons to their outlines directly, no LLM or ComfyUI server involved.
+
+### Sound effect options (`5-soundfx.bat [options]`)
+- `--count 5` variations per explosion/rocket-motor sound (default 3), each with a different seed
+- `--seed 42` base random seed (same seed + count reproduces the same set)
+- `--out path\to\dir` output folder (default: `soundfx\out`)
+- `--voice path\to\clip.wav` source recording for the "Slava Ukraini" voice line (16-bit PCM wav; default looks for `wav.wav` in Downloads)
+
+Pipeline: `mine_explosion` and `shahed_impact` are layered noise/tone synthesis (crack transient +
+pitched sub-bass thump + filtered rumble tail, numpy/scipy) meant to trigger on mine detonations
+and Shahed/loitering-munition impacts; `patriot_launch` is an ignition transient plus a
+flutter-modulated filtered-noise motor burn, for a Patriot interceptor launch. `slava_ukraini.wav`
+is not synthesized - it's silence-trimmed and normalized from a real recorded clip you supply, meant
+to play when a Flamingo cruise missile hits a Russian refinery. No AI model or ComfyUI/Ollama
+server involved; add a generative audio model (e.g. Stable Audio Open in ComfyUI) later if more
+organic variation is needed.
 
 ---------------------------------------------------------------------------
 ## A. Images & video - ComfyUI
