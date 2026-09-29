@@ -14,3 +14,10 @@ soundfx/out/
 
 __pycache__/
 *.pyc
+
+# Character screenshots / downloaded videos (6-characters.bat)
+characters/out/
+characters/videos/
+
+# Generated caricatures and objects (7-caricatures.bat, 8-objects.bat)
+caricatures/out/

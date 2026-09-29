@@ -23,6 +23,9 @@ The OpenCode config template is `config/opencode.json`.
 | `3-coding-llm-t3code.bat` | Starts Ollama, preloads `qwen3:8b` and opens T3 Code. `3-coding-llm-t3code.bat gpt-oss:20b` for a different model, `... qwen3:8b cli` for OpenCode in the terminal |
 | `4-vectorize.bat` | PNG/JPG -> SVG vector trace (like vectorizer.ai / Vector Magic). Drag & drop an image onto it or double-click and pick one. Fully local (`vtracer`), no Ollama/ComfyUI needed. Result: an `.svg` next to the input image |
 | `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line; `--speech clip.mp3` strips a recording down to speech only. Fully local (numpy/scipy synthesis, Demucs for speech), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
+| `6-characters.bat` | YouTube channel/playlist/video -> screenshots of the recurring characters in distinct poses/expressions, one folder per character. Double-click and enter a URL (default `@freeonis`). Fully local (yt-dlp + OWLv2 + CLIP). Result: `characters\out\<name>\` |
+| `7-caricatures.bat` | Famous people (`--who "Emmanuel Macron"`) or yourself (drag & drop a photo) as original flat 2D political-cartoon caricatures in 6 expressions, optionally transparent + SVG. Starts ComfyUI (+ Ollama for photos). Result: `caricatures\out\<name>\` |
+| `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different caption and variant)
@@ -56,6 +59,39 @@ Stylize engines (`stickers/sticker_workflow_*_api.json`, can also be dragged int
 
 Pipeline: `vtracer` (Rust, pip-installed into ComfyUI's embedded Python) traces color regions and
 fits curves/polygons to their outlines directly, no LLM or ComfyUI server involved.
+
+### Character options (`6-characters.bat <url or video files> [options]`)
+- `--max-videos 20` latest N videos per channel/playlist (default 10), `--max-duration 600` skips longer videos (compilations)
+- `--interval 0.5` seconds between sampled frames (default 1), `--min-size 0.15` ignore small background characters
+- `--dedupe 0.95` keep more similar poses (default 0.93), `--full-frame` save the whole frame instead of the crop
+- `--only-known` only fill existing folders, `--reprocess` redo videos that were already processed
+
+Pipeline: yt-dlp downloads the video stream (<=720p, no ffmpeg needed) into `characters\videos\`, frames
+are sampled (near-identical frames skipped), OWLv2 detects characters, CLIP embeds the crops, crops
+are clustered into characters and near-duplicate poses are dropped.
+
+Naming: `characters\names.txt` lists the wanted characters (Zelensky, Trump, Macron, Xi Jinping, Putin,
+Kim Jong Un, Merz, Khamenei); a folder is created for each. Only very recognizable caricatures are
+auto-named (Trump is; the others usually are not). Everything else lands in `character_NN` folders:
+**after a run, move/rename those into the named folders** (and delete misfits). In one uniform cartoon
+style different characters look very similar to CLIP, so later runs only add a new cluster to an
+existing folder when it is nearly identical (`--match 0.9`); otherwise you get a new `character_NN` to
+merge by hand. Lowering `--match` merges more but files wrong characters (e.g. a blonde woman under Putin).
+
+### Caricature / object options (`7-caricatures.bat` / `8-objects.bat`)
+- `--who "Name"` / `--thing "object"` (repeatable), `--photo me.jpg --name Felix` caricature from a photo
+  (qwen3-vl describes the look, SDXL img2img), `--features "grey hair, glasses"` extra look hints
+- `--variant "..."` own expressions/poses or views/states instead of the built-in list, `--count 3` fewer images
+- `--strength 0.75` photo img2img: 0.5 close to the photo ... 0.9 free cartoon
+- `--cutout` transparent PNG (rembg), `--vectorize` SVG via vtracer ("logo" preset, of the cutout if given)
+
+The look is described in the prompt (flat 2D satire cartoon, big round head, thick outlines, pastel
+colors, `caricatures/caricature_workflow_api.json`, can be dragged into ComfyUI); it draws new caricatures
+and does not copy any channel's character designs.
+
+**Known issue:** ComfyUI v0.37.0 in this install returns flat gray images for SDXL. The VAE already
+encodes to an almost empty latent, on GPU and with `--cpu`, while the checkpoint weights are fine. This
+also breaks `2-stickers.bat` stylizing. Flows 7/8 need that fixed first (e.g. an older ComfyUI release).
 
 ### Sound effect options (`5-soundfx.bat [options]`)
 - `--count 5` variations per explosion/rocket-motor sound (default 3), each with a different seed

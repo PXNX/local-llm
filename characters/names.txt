@@ -1,0 +1,13 @@
+# Characters to collect: <folder name> = <real name CLIP should recognize>
+# A folder is created for each line. Seed a folder by dropping a few screenshots of that
+# character into it (or by renaming/merging character_NN folders); later runs sort by similarity.
+# Without seeds, a new character is only auto-named when CLIP is very confident (works for
+# very recognizable caricatures like Trump, often not for others).
+Zelensky = Volodymyr Zelensky
+Trump = Donald Trump
+Macron = Emmanuel Macron
+Xi_Jinping = Xi Jinping
+Putin = Vladimir Putin
+Kim_Jong_Un = Kim Jong Un
+Merz = Friedrich Merz
+Khamenei = Ayatollah Ali Khamenei
