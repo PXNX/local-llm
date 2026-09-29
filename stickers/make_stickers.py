@@ -93,7 +93,9 @@ def caption(img, count, lang):
         "Look at this image. Reply with JSON only, in this exact shape: "
         '{"subject": "<short English description of the main subject for an image generator, max 15 words>", '
         f'"stickers": [<{count} different reaction-sticker ideas, each '
-        '{"expression": "<how the subject should pose or look to act out the reaction, for an image generator, max 12 words>", '
+        '{"expression": "<a specific, exaggerated pose/face that unmistakably acts out that exact emotion for an '
+        'image generator - e.g. wide-mouthed mid-yawn for tired, one paw/hand covering the face for embarrassment, '
+        'running mid-stride for on my way, big pleading eyes for please, eyes closed turned away for annoyed - max 12 words>", '
         f'"text": "<a short reaction-sticker text in {lang}, 1-3 words, like chat-sticker classics: '
         '\\"Hi there!\\", \\"Yes!\\", \\"Nope\\", \\"Thank youuuu\\", \\"Wait, what?\\", \\"Please?\\", \\"Oh no!\\", \\"Kisses!\\" '
         '- or an empty string if the pose already says it without text; no hashtags, no emojis>}>]}'

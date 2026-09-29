@@ -15,14 +15,14 @@
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": ["1", 1],
-      "text": "die-cut sticker illustration of SUBJECT, cartoon style, bold clean outlines, vibrant flat colors, cute, expressive, centered, plain white background"
+      "text": "chat sticker photo of SUBJECT, clearly acting out that emotion with an exaggerated, unmistakable facial expression and body language, vivid detailed fur/skin, warm studio lighting, vibrant colors, high quality, centered, plain white background"
     }
   },
   "5": {
     "class_type": "CLIPTextEncode",
     "inputs": {
       "clip": ["1", 1],
-      "text": "text, letters, watermark, signature, blurry, lowres, photo, realistic, busy background, frame, cropped"
+      "text": "text, letters, watermark, signature, blurry, lowres, flat cartoon, illustration, drawing, busy background, frame, cropped, neutral expression, blank stare"
     }
   },
   "6": {
