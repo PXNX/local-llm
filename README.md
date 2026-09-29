@@ -26,7 +26,7 @@ The OpenCode config template is `config/opencode.json`.
 | `6-characters.bat` | YouTube channel/playlist/video -> screenshots of the recurring characters in distinct poses/expressions, one folder per character. Double-click and enter a URL (default `@freeonis`). Fully local (yt-dlp + OWLv2 + CLIP). Result: `characters\out\<name>\` |
 | `7-caricatures.bat` | Famous people (`--who "Emmanuel Macron"`) or yourself (drag & drop a photo) as original flat 2D political-cartoon caricatures in 6 expressions, optionally transparent + SVG. Starts ComfyUI (+ Ollama for photos). Result: `caricatures\out\<name>\` |
 | `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
-| `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`topvideos\telegram.ini`) and Ollama (`qwen3-vl:4b` rates the clips). Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
+| `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`.env`) and Ollama (`qwen3-vl:4b` rates the clips). Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different reaction, pose and text style)
@@ -104,9 +104,12 @@ also breaks `2-stickers.bat` stylizing. Flows 7/8 need that fixed first (e.g. an
 - `--clip-seconds 30` max length per clip, `--format landscape` 1280x720 instead of vertical 720x1280, `--lang German` titles
 - `--headline "My text"` own intro text, `--no-title-bar` only the rank badge, `--nvenc` GPU encoding (new driver needed)
 
-Setup once: create an app at https://my.telegram.org (API development tools) and put `api_id`/`api_hash`
-into `topvideos\telegram.ini` (the .bat creates it from `telegram.ini.example` and opens Notepad). The first
-run asks for your phone number and the Telegram login code; the session is stored in `topvideos\telegram.session`
+Setup once: create an app at https://my.telegram.org (API development tools) and put `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`
+(plus `TELEGRAM_PASSWORD` if two-step verification is on) into `.env` in the repo root - not in git, the .bat
+creates it from `.env.example` and opens Notepad. The first
+run shows a QR code: scan it in the Telegram app under Settings > Devices > Link Desktop Device
+(`--login code` for phone number + login code instead; that code arrives as a message in the "Telegram"
+chat of your app, rarely by SMS, and the script says where it was sent); the session is stored in `topvideos\telegram.session`
 (treat it like a password, it is in `.gitignore`). Numeric channel IDs only resolve for channels your account has joined.
 
 Pipeline: Telethon reads today's posts, keeps videos of 3-180 s and drops reposts (same file or same
