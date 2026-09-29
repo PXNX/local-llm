@@ -20,8 +20,8 @@
     "inputs": {
       "clip": ["2", 0],
       "vae": ["3", 0],
-      "prompt": "die-cut sticker illustration of SUBJECT, cartoon style, bold clean outlines, vibrant flat colors, cute, expressive, centered, plain white background, keep the same face and identity as the reference image",
-      "negative_prompt": "text, letters, watermark, signature, blurry, lowres, photo, realistic, busy background, frame, cropped",
+      "prompt": "chat sticker photo of SUBJECT, clearly acting out that emotion with an exaggerated, unmistakable facial expression and body language, vivid detailed fur/skin, warm studio lighting, vibrant colors, high quality, centered, plain white background, keep the same face and identity as the reference image",
+      "negative_prompt": "text, letters, watermark, signature, blurry, lowres, flat cartoon, illustration, drawing, busy background, frame, cropped, neutral expression, blank stare",
       "resolution": 1024,
       "image_1": ["4", 0]
     }
