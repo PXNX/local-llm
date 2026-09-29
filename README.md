@@ -33,8 +33,8 @@ The OpenCode config template is `config/opencode.json`.
 - `--lang German` caption language
 - `--text "My text"` your own caption (repeatable, one per sticker), skips the LLM for text
 - `--no-text` no text on any sticker, just the stylized image acting out the reaction
-- `--engine sdxl` stylize engine, see below, default `sdxl`
-- `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55 (`sdxl`/`photomaker` only)
+- `--engine flux1` stylize engine, see below, default `flux1`
+- `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55 (`flux1`/`sdxl`/`photomaker` only)
 - `--no-stylize` no ComfyUI, only cut out the original (works without the driver update)
 
 Pipeline: `qwen3-vl:4b` (Ollama) picks a reaction per sticker - a pose/expression for the subject to
@@ -47,8 +47,9 @@ color and placement cycle through a few styles across the batch, see `TEXT_STYLE
 Stylize engines (`stickers/sticker_workflow_*_api.json`, can also be dragged into ComfyUI):
 | engine | needs | notes |
 | --- | --- | --- |
-| `sdxl` (default) | `DreamShaperXL_Turbo_v2_1.safetensors` (already downloaded) | Fast SDXL img2img, fits the RTX 2060's 6 GB VRAM, but only loosely resembles the photo |
-| `photomaker` | same checkpoint + `models/photomaker/photomaker-v2.bin` (`0-download-all.bat` grabs it) | SDXL + PhotoMaker face-identity conditioning - best resemblance for the VRAM it costs |
+| `flux1` (default) | `flux1-schnell-Q4_K_S.gguf` + `clip_l.safetensors` + `t5-v1_1-xxl-encoder-Q5_K_M.gguf` + `ae.safetensors` (all already downloaded) | FLUX.1 schnell img2img, GGUF-quantized, fits the RTX 2060's 6 GB VRAM - SDXL is broken on this ComfyUI build (see Known issue below), FLUX.1 works |
+| `sdxl` | `DreamShaperXL_Turbo_v2_1.safetensors` (already downloaded) | Fast SDXL img2img, but currently broken - flat gray output, see Known issue below |
+| `photomaker` | same checkpoint + `models/photomaker/photomaker-v2.bin` (`0-download-all.bat` grabs it) | SDXL + PhotoMaker face-identity conditioning - best resemblance for the VRAM it costs, once SDXL is fixed |
 | `qwen-image21` | `models/diffusion_models/qwen-image-2.1-UC-fp8.safetensors` (downloaded) + a Qwen3-VL-8B text encoder + the Qwen-Image 2.1 VAE (not downloaded yet, several more GB) | Native reference-image editing, best quality ceiling, but slow on 6 GB VRAM |
 | `flux2-klein` | `models/diffusion_models/flux2-klein-base-9b-fp8.safetensors` + `models/vae/flux2_vae.safetensors` (downloaded) + a Flux.2 Klein Qwen3 text encoder (not downloaded yet) | FLUX.2's distilled edit model, also slow on 6 GB VRAM |
 
@@ -93,9 +94,12 @@ The look is described in the prompt (flat 2D satire cartoon, big round head, thi
 colors, `caricatures/caricature_workflow_api.json`, can be dragged into ComfyUI); it draws new caricatures
 and does not copy any channel's character designs.
 
-**Known issue:** ComfyUI v0.37.0 in this install returns flat gray images for SDXL. The VAE already
-encodes to an almost empty latent, on GPU and with `--cpu`, while the checkpoint weights are fine. This
-also breaks `2-stickers.bat` stylizing. Flows 7/8 need that fixed first (e.g. an older ComfyUI release).
+**Known issue:** SDXL returns flat gray images in this ComfyUI install - the UNet's noise prediction
+stays near zero at every sampling step, regardless of ComfyUI version, PyTorch version (tested
+2.6.0 through 2.14.0), CUDA build, or attention backend; matches unresolved upstream issues
+Comfy-Org/ComfyUI#13116 and #15137. FLUX.1/2 and Qwen-Image are unaffected (same GPU, same install),
+so `2-stickers.bat` now defaults to the `flux1` engine instead. Flows 7/8 still use SDXL and need
+either that upstream bug fixed or switching to a FLUX-based workflow like `stickers` did.
 
 ### Top-5 video options (`9-top5-videos.bat [options]`)
 - `--topic funny` / `cute` / `auto` (default: whichever theme has the stronger top 5 today), `--subject animals` only clips about that

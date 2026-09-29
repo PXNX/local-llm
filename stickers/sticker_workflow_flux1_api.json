@@ -1,0 +1,52 @@
+{
+  "1": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": { "unet_name": "flux1-schnell-Q4_K_S.gguf" }
+  },
+  "2": {
+    "class_type": "DualCLIPLoaderGGUF",
+    "inputs": { "clip_name1": "clip_l.safetensors", "clip_name2": "t5-v1_1-xxl-encoder-Q5_K_M.gguf", "type": "flux" }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "ae.safetensors" }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "sticker_input.png" }
+  },
+  "5": {
+    "class_type": "VAEEncode",
+    "inputs": { "pixels": ["4", 0], "vae": ["3", 0] }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["2", 0],
+      "text": "die-cut sticker illustration of SUBJECT, cartoon style, bold clean outlines, vibrant flat colors, cute, expressive, centered, plain white background"
+    }
+  },
+  "7": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["6", 0],
+      "negative": ["6", 0],
+      "latent_image": ["5", 0],
+      "seed": 0,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 0.55
+    }
+  },
+  "9": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["7", 0], "vae": ["3", 0] }
+  },
+  "8": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["9", 0], "filename_prefix": "sticker/stylized" }
+  }
+}
