@@ -27,6 +27,7 @@ The OpenCode config template is `config/opencode.json`.
 | `7-caricatures.bat` | Famous people (`--who "Emmanuel Macron"`) or yourself (drag & drop a photo) as original flat 2D political-cartoon caricatures in 6 expressions, optionally transparent + SVG. Starts ComfyUI (+ Ollama for photos). Result: `caricatures\out\<name>\` |
 | `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
 | `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`.env`) and Ollama (`qwen3-vl:4b` rates the clips). Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
+| `10-image-to-video.bat` | Image -> short animated MP4 clip (the image is the first frame). Drag & drop an image onto it or double-click and pick one. `qwen3-vl:4b` writes the motion prompt unless you give `--prompt`. Wan 2.2 TI2V 5B in ComfyUI (already downloaded), roughly 10-30 min per clip. Starts Ollama + ComfyUI automatically. Result: `img2video\out\` |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different reaction, pose and text style)
@@ -100,6 +101,19 @@ stays near zero at every sampling step, regardless of ComfyUI version, PyTorch v
 Comfy-Org/ComfyUI#13116 and #15137. FLUX.1/2 and Qwen-Image are unaffected (same GPU, same install),
 so `2-stickers.bat` now defaults to the `flux1` engine instead. Flows 7/8 still use SDXL and need
 either that upstream bug fixed or switching to a FLUX-based workflow like `stickers` did.
+
+### Image-to-video options (`10-image-to-video.bat photo.jpg [options]`)
+- `--prompt "the dog wags its tail, slow zoom in"` what should move and how the camera moves (English works best, repeatable, one per clip); without it `qwen3-vl:4b` looks at the image and writes one
+- `--count 3` number of clips, each with its own prompt and seed
+- `--seconds 3` clip length at 24 fps (default 3; ~5 s is the practical limit on 6 GB VRAM)
+- `--size 832` long side in pixels, the aspect ratio follows the image (default 832 -> 832x480 for 16:9; `640` is faster)
+- `--steps 20` sampling steps (12-15 is faster but blurrier), `--cfg 5` prompt strength, `--seed 42`
+
+Pipeline: `qwen3-vl:4b` (Ollama, unloaded right after) describes the scene + one motion and camera move
+-> the image is resized to the video size and encoded as the first latent frame (`Wan22ImageToVideoLatent`)
+-> Wan 2.2 TI2V 5B generates the remaining frames (uni_pc, 20 steps, CFG 5, shift 8) -> H.264 MP4 at 24 fps,
+plus a `.txt` with the prompt next to it. The workflow is `img2video/img2video_workflow_api.json` (can be
+dragged into ComfyUI); the 5B fp16 model is bigger than the 6 GB VRAM and gets offloaded to RAM (`--lowvram`).
 
 ### Top-5 video options (`9-top5-videos.bat [options]`)
 - `--topic funny` / `cute` / `auto` (default: whichever theme has the stronger top 5 today), `--subject animals` only clips about that
