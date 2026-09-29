@@ -12,10 +12,13 @@ Usage (via 2-stickers.bat, which uses ComfyUI's embedded Python):
                            [--engine sdxl] [--strength 0.55] [--no-stylize] [--seed 42]
 
 Stylize engines (--engine):
-  sdxl          DreamShaperXL Turbo img2img (default). Fast, fits 6 GB VRAM, but only loosely
-                based on the photo since it starts from noise seeded with it.
+  flux1         FLUX.1 [schnell] img2img, GGUF-quantized (default). Needs
+                models/diffusion_models/flux1-schnell-Q4_K_S.gguf, models/text_encoders/clip_l.safetensors
+                and t5-v1_1-xxl-encoder-Q5_K_M.gguf, models/vae/ae.safetensors. SDXL is broken on this
+                ComfyUI build (gray-square bug, upstream issue), FLUX.1 works instead.
+  sdxl          DreamShaperXL Turbo img2img. Currently broken, see above - kept for when it's fixed.
   photomaker    Same SDXL checkpoint plus PhotoMaker face-identity conditioning. Needs
-                models/photomaker/photomaker-v2.bin. Best resemblance-for-VRAM tradeoff.
+                models/photomaker/photomaker-v2.bin. Best resemblance-for-VRAM tradeoff, once SDXL works.
   qwen-image21  Qwen-Image 2.1 edit model, native reference-image conditioning. Needs
                 models/diffusion_models/qwen-image-2.1-UC-fp8.safetensors (or -NVFP4),
                 models/text_encoders/qwen3vl_8b_text_encoder.safetensors and
@@ -58,6 +61,7 @@ TEXT_STYLES = [
 ]
 
 ENGINES = {
+    "flux1": "sticker_workflow_flux1_api.json",
     "sdxl": "sticker_workflow_api.json",
     "photomaker": "sticker_workflow_photomaker_api.json",
     "qwen-image21": "sticker_workflow_qwen_image21_api.json",
@@ -127,7 +131,12 @@ def stylize(img, subject, expression, seed, strength, idx, engine):
     img.convert("RGB").resize((w, h), Image.LANCZOS).save(COMFY_DIR / "input" / name)
 
     wf = json.loads((HERE / ENGINES[engine]).read_text())
-    if engine == "sdxl":
+    if engine == "flux1":
+        wf["4"]["inputs"]["image"] = name
+        wf["6"]["inputs"]["text"] = wf["6"]["inputs"]["text"].replace("SUBJECT", subject)
+        wf["7"]["inputs"]["seed"] = seed
+        wf["7"]["inputs"]["denoise"] = strength
+    elif engine == "sdxl":
         wf["2"]["inputs"]["image"] = name
         wf["4"]["inputs"]["text"] = wf["4"]["inputs"]["text"].replace("SUBJECT", subject)
         wf["6"]["inputs"]["seed"] = seed
@@ -257,8 +266,8 @@ def main():
     ap.add_argument("--lang", default="English", help="caption language (default English)")
     ap.add_argument("--text", action="append", help="use this caption instead of the LLM (repeatable)")
     ap.add_argument("--no-text", action="store_true", help="no text on any sticker, just the stylized image")
-    ap.add_argument("--engine", choices=list(ENGINES), default="sdxl", help="stylize engine, see above (default sdxl)")
-    ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); sdxl/photomaker only")
+    ap.add_argument("--engine", choices=list(ENGINES), default="flux1", help="stylize engine, see above (default flux1)")
+    ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); flux1/sdxl/photomaker only")
     ap.add_argument("--no-stylize", action="store_true", help="skip ComfyUI, only cut out the original")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out", type=Path, default=HERE / "out")
