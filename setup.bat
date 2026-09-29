@@ -33,11 +33,11 @@ if not exist "%PY%" (
   del ComfyUI_windows_portable_nvidia.7z
 )
 
-echo === ComfyUI-GGUF node + sticker/vectorize/character dependencies
+echo === ComfyUI-GGUF node + sticker/vectorize/character/top-video dependencies
 if not exist "ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF" (
   git clone --depth 1 https://github.com/city96/ComfyUI-GGUF ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF
 )
-"%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]" vtracer yt-dlp scikit-learn
+"%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]" vtracer yt-dlp scikit-learn telethon imageio-ffmpeg
 
 echo.
 echo Done. Next steps:

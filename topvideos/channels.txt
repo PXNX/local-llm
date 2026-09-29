@@ -1,0 +1,3 @@
+# Telegram channels to collect today's videos from, one per line: numeric ID or @username.
+# Numeric IDs (as in t.me/c/<id>/...) only work for channels your account has joined.
+1482614635

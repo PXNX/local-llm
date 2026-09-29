@@ -26,6 +26,7 @@ The OpenCode config template is `config/opencode.json`.
 | `6-characters.bat` | YouTube channel/playlist/video -> screenshots of the recurring characters in distinct poses/expressions, one folder per character. Double-click and enter a URL (default `@freeonis`). Fully local (yt-dlp + OWLv2 + CLIP). Result: `characters\out\<name>\` |
 | `7-caricatures.bat` | Famous people (`--who "Emmanuel Macron"`) or yourself (drag & drop a photo) as original flat 2D political-cartoon caricatures in 6 expressions, optionally transparent + SVG. Starts ComfyUI (+ Ollama for photos). Result: `caricatures\out\<name>\` |
 | `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
+| `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`topvideos\telegram.ini`) and Ollama (`qwen3-vl:4b` rates the clips). Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different caption and variant)
@@ -92,6 +93,27 @@ and does not copy any channel's character designs.
 **Known issue:** ComfyUI v0.37.0 in this install returns flat gray images for SDXL. The VAE already
 encodes to an almost empty latent, on GPU and with `--cpu`, while the checkpoint weights are fine. This
 also breaks `2-stickers.bat` stylizing. Flows 7/8 need that fixed first (e.g. an older ComfyUI release).
+
+### Top-5 video options (`9-top5-videos.bat [options]`)
+- `--topic funny` / `cute` / `auto` (default: whichever theme has the stronger top 5 today), `--subject animals` only clips about that
+- `--hours 48` look back N hours instead of "since midnight" (with fewer than 5 videos today it widens to 24 h by itself)
+- `--channel @name` (repeatable) instead of `channels.txt`, `--max-candidates 25` clips downloaded + rated
+- `--clip-seconds 30` max length per clip, `--format landscape` 1280x720 instead of vertical 720x1280, `--lang German` titles
+- `--headline "My text"` own intro text, `--no-title-bar` only the rank badge, `--nvenc` GPU encoding (new driver needed)
+
+Setup once: create an app at https://my.telegram.org (API development tools) and put `api_id`/`api_hash`
+into `topvideos\telegram.ini` (the .bat creates it from `telegram.ini.example` and opens Notepad). The first
+run asks for your phone number and the Telegram login code; the session is stored in `topvideos\telegram.session`
+(treat it like a password, it is in `.gitignore`). Numeric channel IDs only resolve for channels your account has joined.
+
+Pipeline: Telethon reads today's posts, keeps videos of 3-180 s and drops reposts (same file or same
+duration+size) -> pre-ranks by engagement (views, reactions, forwards relative to the channel's median views)
+and downloads the top candidates to `topvideos\downloads\` -> `qwen3-vl:4b` sees a 2x2 grid of frames + the post
+caption and scores funny/cute 0-10, flags non-entertainment (news, ads, text slides) and writes a short title
+(cached in `topvideos\scores.json`) -> the 5 best clips of one topic are ranked by AI score + up to 2 points
+engagement bonus -> ffmpeg (bundled `imageio-ffmpeg`) renders intro, then per place a title card and the clip
+(blurred fill background, rank badge, loudness-normalized audio) and joins everything into one MP4.
+The clips belong to the channels/creators: check the rights before you publish the result.
 
 ### Sound effect options (`5-soundfx.bat [options]`)
 - `--count 5` variations per explosion/rocket-motor sound (default 3), each with a different seed
