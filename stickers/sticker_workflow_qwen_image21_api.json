@@ -1,0 +1,52 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": { "unet_name": "qwen-image-2.1-UC-fp8.safetensors", "weight_dtype": "default" }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": { "clip_name": "qwen3vl_8b_text_encoder.safetensors", "type": "qwen_image" }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "qwen_image_2.1_vae.safetensors" }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "sticker_input.png" }
+  },
+  "5": {
+    "class_type": "TextEncodeQwenImage21",
+    "inputs": {
+      "clip": ["2", 0],
+      "vae": ["3", 0],
+      "prompt": "die-cut sticker illustration of SUBJECT, cartoon style, bold clean outlines, vibrant flat colors, cute, expressive, centered, plain white background, keep the same face and identity as the reference image",
+      "negative_prompt": "text, letters, watermark, signature, blurry, lowres, photo, realistic, busy background, frame, cropped",
+      "resolution": 1024,
+      "image_1": ["4", 0]
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["5", 0],
+      "negative": ["5", 1],
+      "latent_image": ["5", 2],
+      "seed": 0,
+      "steps": 20,
+      "cfg": 4.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "7": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["6", 0], "vae": ["3", 0] }
+  },
+  "8": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["7", 0], "filename_prefix": "sticker/stylized" }
+  }
+}

@@ -8,7 +8,20 @@ Pipeline per sticker:
 
 Usage (via 2-stickers.bat, which uses ComfyUI's embedded Python):
   2-stickers.bat photo.jpg [--count 3] [--lang German] [--text "Custom text"]
-                           [--strength 0.55] [--no-stylize] [--seed 42]
+                           [--engine sdxl] [--strength 0.55] [--no-stylize] [--seed 42]
+
+Stylize engines (--engine):
+  sdxl          DreamShaperXL Turbo img2img (default). Fast, fits 6 GB VRAM, but only loosely
+                based on the photo since it starts from noise seeded with it.
+  photomaker    Same SDXL checkpoint plus PhotoMaker face-identity conditioning. Needs
+                models/photomaker/photomaker-v2.bin. Best resemblance-for-VRAM tradeoff.
+  qwen-image21  Qwen-Image 2.1 edit model, native reference-image conditioning. Needs
+                models/diffusion_models/qwen-image-2.1-UC-fp8.safetensors (or -NVFP4),
+                models/text_encoders/qwen3vl_8b_text_encoder.safetensors and
+                models/vae/qwen_image_2.1_vae.safetensors. Large model, slow without a lot of VRAM.
+  flux2-klein   FLUX.2 [klein] edit model. Needs models/diffusion_models/flux2-klein-base-9b-fp8.safetensors,
+                models/text_encoders/flux2_klein_qwen3_text_encoder.safetensors and
+                models/vae/flux2_vae.safetensors. Large model, slow without a lot of VRAM.
 """
 import argparse
 import base64
@@ -35,6 +48,13 @@ SIZE = 512          # sticker canvas (WhatsApp/Telegram spec)
 BORDER = 10         # white die-cut outline in px
 MAX_BYTES = 100_000  # WhatsApp limit for static stickers
 
+ENGINES = {
+    "sdxl": "sticker_workflow_api.json",
+    "photomaker": "sticker_workflow_photomaker_api.json",
+    "qwen-image21": "sticker_workflow_qwen_image21_api.json",
+    "flux2-klein": "sticker_workflow_flux2_klein_api.json",
+}
+
 
 # ---------------------------------------------------------------- helpers
 def http_json(url, payload=None, timeout=600):
@@ -59,8 +79,10 @@ def caption(img, count, lang):
     prompt = (
         "Look at this image. Reply with JSON only, in this exact shape: "
         '{"subject": "<short English description of the main subject for an image generator, max 15 words>", '
-        f'"captions": [<{count} different short, funny, witty sticker texts in {lang}, max 6 words each, '
-        "that fit this image - puns, relatable reactions or ironic comments; no hashtags, no emojis>]}"
+        f'"captions": [<{count} different short reaction-sticker texts in {lang}, 1-3 words each, '
+        "like chat-sticker classics: \"Hi there!\", \"Yes!\", \"Nope\", \"Thank youuuu\", \"Wait, what?\", "
+        "\"Please?\", \"Oh no!\", \"Kisses!\" - punchy everyday reactions/exclamations that fit this image; "
+        "no hashtags, no emojis>]}"
     )
     payload = {
         "model": VISION_MODEL,
@@ -82,18 +104,33 @@ def caption(img, count, lang):
 
 
 # ---------------------------------------------------------------- 2. stylize
-def stylize(img, subject, seed, strength, idx):
-    # Pre-scale to ~1 megapixel, multiples of 64 (SDXL native size)
+def stylize(img, subject, seed, strength, idx, engine):
+    # Pre-scale to ~1 megapixel, multiples of 64 (fits SDXL and the DiT edit models alike)
     scale = (1024 * 1024 / (img.width * img.height)) ** 0.5
     w, h = max(64, round(img.width * scale / 64) * 64), max(64, round(img.height * scale / 64) * 64)
     name = f"sticker_input_{idx}.png"
     img.convert("RGB").resize((w, h), Image.LANCZOS).save(COMFY_DIR / "input" / name)
 
-    wf = json.loads((HERE / "sticker_workflow_api.json").read_text())
-    wf["2"]["inputs"]["image"] = name
-    wf["4"]["inputs"]["text"] = wf["4"]["inputs"]["text"].replace("SUBJECT", subject)
-    wf["6"]["inputs"]["seed"] = seed
-    wf["6"]["inputs"]["denoise"] = strength
+    wf = json.loads((HERE / ENGINES[engine]).read_text())
+    if engine == "sdxl":
+        wf["2"]["inputs"]["image"] = name
+        wf["4"]["inputs"]["text"] = wf["4"]["inputs"]["text"].replace("SUBJECT", subject)
+        wf["6"]["inputs"]["seed"] = seed
+        wf["6"]["inputs"]["denoise"] = strength
+    elif engine == "photomaker":
+        wf["2"]["inputs"]["image"] = name
+        wf["10"]["inputs"]["text"] = wf["10"]["inputs"]["text"].replace("SUBJECT", subject)
+        wf["6"]["inputs"]["seed"] = seed
+        wf["6"]["inputs"]["denoise"] = strength
+    elif engine == "qwen-image21":
+        wf["4"]["inputs"]["image"] = name
+        wf["5"]["inputs"]["prompt"] = wf["5"]["inputs"]["prompt"].replace("SUBJECT", subject)
+        wf["6"]["inputs"]["seed"] = seed
+    elif engine == "flux2-klein":
+        wf["4"]["inputs"]["image"] = name
+        wf["6"]["inputs"]["text"] = wf["6"]["inputs"]["text"].replace("SUBJECT", subject)
+        wf["11"]["inputs"]["width"], wf["11"]["inputs"]["height"] = w, h
+        wf["12"]["inputs"]["seed"] = seed
 
     pid = http_json(f"{COMFY_URL}/prompt", {"prompt": wf})["prompt_id"]
     while True:
@@ -198,7 +235,8 @@ def main():
     ap.add_argument("--count", type=int, default=3, help="number of stickers (default 3)")
     ap.add_argument("--lang", default="English", help="caption language (default English)")
     ap.add_argument("--text", action="append", help="use this caption instead of the LLM (repeatable)")
-    ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free)")
+    ap.add_argument("--engine", choices=list(ENGINES), default="sdxl", help="stylize engine, see above (default sdxl)")
+    ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); sdxl/photomaker only")
     ap.add_argument("--no-stylize", action="store_true", help="skip ComfyUI, only cut out the original")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out", type=Path, default=HERE / "out")
@@ -232,8 +270,8 @@ def main():
     for i in range(count):
         base = src
         if stylize_on:
-            print(f"[stylize] sticker {i + 1}/{count} (seed {seed + i}) ...")
-            base = stylize(src, subject, seed + i, args.strength, i)
+            print(f"[stylize] sticker {i + 1}/{count} (seed {seed + i}, engine {args.engine}) ...")
+            base = stylize(src, subject, seed + i, args.strength, i, args.engine)
         print(f"[cutout ] sticker {i + 1}/{count} ...")
         cut = cut_out(base)
         sticker = compose(cut, caps[i])

@@ -12,6 +12,8 @@ WAN14=$HF/QuantStack/Wan2.2-T2V-A14B-GGUF/resolve/main
 FILES=(
   # --- Images: SDXL (small, fast)
   "checkpoints      $HF/Lykon/dreamshaper-xl-v2-turbo/resolve/main/DreamShaperXL_Turbo_v2_1.safetensors"
+  # --- Stickers: PhotoMaker (face-identity conditioning for the sdxl checkpoint above)
+  "photomaker       $HF/TencentARC/PhotoMaker-V2/resolve/main/photomaker-v2.bin"
   # --- Images: FLUX (large, GGUF)
   "diffusion_models $HF/city96/FLUX.1-schnell-gguf/resolve/main/flux1-schnell-Q4_K_S.gguf"
   "diffusion_models $HF/city96/FLUX.1-dev-gguf/resolve/main/flux1-dev-Q4_K_S.gguf"
@@ -28,6 +30,9 @@ FILES=(
   # --- Video: Wan 2.2 14B (large, GGUF, two experts)
   "diffusion_models $WAN14/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q3_K_M.gguf"
   "diffusion_models $WAN14/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q3_K_M.gguf"
+  # --- Stickers: --engine qwen-image21 / flux2-klein need more files not listed here (multi-GB
+  # text encoders + a VAE each); see the --engine help in stickers/make_stickers.py for what's
+  # missing and where it goes. Grab them manually once you know which exact checkpoint you want.
 )
 
 failed=0

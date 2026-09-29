@@ -22,18 +22,32 @@ The OpenCode config template is `config/opencode.json`.
 | `2-stickers.bat` | Image -> 3 transparent WebP stickers with funny text. Drag & drop an image onto it or double-click and pick one. Starts Ollama + ComfyUI automatically. Result: `stickers\out\` |
 | `3-coding-llm-t3code.bat` | Starts Ollama, preloads `qwen3:8b` and opens T3 Code. `3-coding-llm-t3code.bat gpt-oss:20b` for a different model, `... qwen3:8b cli` for OpenCode in the terminal |
 | `4-vectorize.bat` | PNG/JPG -> SVG vector trace (like vectorizer.ai / Vector Magic). Drag & drop an image onto it or double-click and pick one. Fully local (`vtracer`), no Ollama/ComfyUI needed. Result: an `.svg` next to the input image |
-| `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line. Fully local (numpy/scipy synthesis), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
+| `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line; `--speech clip.mp3` strips a recording down to speech only. Fully local (numpy/scipy synthesis, Demucs for speech), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different caption and variant)
 - `--lang German` caption language
 - `--text "My text"` your own caption (repeatable, one per sticker)
-- `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55
+- `--engine sdxl` stylize engine, see below, default `sdxl`
+- `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55 (`sdxl`/`photomaker` only)
 - `--no-stylize` no ComfyUI, only cut out the original (works without the driver update)
 
-Pipeline: `qwen3-vl:4b` (Ollama) describes the image and writes captions, then ComfyUI SDXL
-img2img (`stickers/sticker_workflow_api.json`, can also be dragged into ComfyUI) makes a cartoon sticker version,
-then rembg removes the background, then white outline + Impact text, then 512x512 WebP < 100 KB (WhatsApp/Telegram).
+Pipeline: `qwen3-vl:4b` (Ollama) describes the image and writes short reaction-style captions
+("Hi there!", "Nope", "Thank youuuu" ...), then ComfyUI turns it into a cartoon sticker version
+(`--engine`, below), then rembg removes the background, then white outline + Impact text, then
+512x512 WebP < 100 KB (WhatsApp/Telegram).
+
+Stylize engines (`stickers/sticker_workflow_*_api.json`, can also be dragged into ComfyUI):
+| engine | needs | notes |
+| --- | --- | --- |
+| `sdxl` (default) | `DreamShaperXL_Turbo_v2_1.safetensors` (already downloaded) | Fast SDXL img2img, fits the RTX 2060's 6 GB VRAM, but only loosely resembles the photo |
+| `photomaker` | same checkpoint + `models/photomaker/photomaker-v2.bin` (`0-download-all.bat` grabs it) | SDXL + PhotoMaker face-identity conditioning - best resemblance for the VRAM it costs |
+| `qwen-image21` | `models/diffusion_models/qwen-image-2.1-UC-fp8.safetensors` (downloaded) + a Qwen3-VL-8B text encoder + the Qwen-Image 2.1 VAE (not downloaded yet, several more GB) | Native reference-image editing, best quality ceiling, but slow on 6 GB VRAM |
+| `flux2-klein` | `models/diffusion_models/flux2-klein-base-9b-fp8.safetensors` + `models/vae/flux2_vae.safetensors` (downloaded) + a Flux.2 Klein Qwen3 text encoder (not downloaded yet) | FLUX.2's distilled edit model, also slow on 6 GB VRAM |
+
+`qwen-image21` and `flux2-klein` are wired up but need the missing text-encoder (and for
+`qwen-image21`, VAE) files placed by hand before they'll run - see the `--engine` help in
+`stickers/make_stickers.py --help` for exact filenames/paths.
 
 ### Vectorize options (`4-vectorize.bat photo.jpg [options]`)
 - `--style photo` smooth curves for photos/gradients (default), `logo` crisp flat-color shapes, `sketch` preserves fine detail/lines
@@ -48,14 +62,19 @@ fits curves/polygons to their outlines directly, no LLM or ComfyUI server involv
 - `--seed 42` base random seed (same seed + count reproduces the same set)
 - `--out path\to\dir` output folder (default: `soundfx\out`)
 - `--voice path\to\clip.wav` source recording for the "Slava Ukraini" voice line (16-bit PCM wav; default looks for `wav.wav` in Downloads)
+- `--speech path\to\clip.mp3` removes background noise/music from a clip (mp3/wav/m4a/...) and keeps only the speech, written as `<name>_speech.wav`; repeatable. With `--speech`, only those clips are processed (no explosions etc.)
+- `--denoise 1.5` strength of the noise gate after vocal separation (0 = separation only, default 1; higher is more aggressive but sounds more "underwater")
 
 Pipeline: `mine_explosion` and `shahed_impact` are layered noise/tone synthesis (crack transient +
 pitched sub-bass thump + filtered rumble tail, numpy/scipy) meant to trigger on mine detonations
 and Shahed/loitering-munition impacts; `patriot_launch` is an ignition transient plus a
 flutter-modulated filtered-noise motor burn, for a Patriot interceptor launch. `slava_ukraini.wav`
 is not synthesized - it's silence-trimmed and normalized from a real recorded clip you supply, meant
-to play when a Flamingo cruise missile hits a Russian refinery. No AI model or ComfyUI/Ollama
-server involved; add a generative audio model (e.g. Stable Audio Open in ComfyUI) later if more
+to play when a Flamingo cruise missile hits a Russian refinery. `--speech` runs the clip through
+HDemucs vocal separation (torchaudio, ~320 MB model downloaded once to the torch cache, GPU if
+available), then an 80 Hz high-pass against rumble/hum and a spectral noise gate whose noise
+profile is estimated from the quietest frames of each frequency band, then silence-trim + normalize.
+Apart from Demucs, no AI model or ComfyUI/Ollama server involved; add a generative audio model (e.g. Stable Audio Open in ComfyUI) later if more
 organic variation is needed.
 
 ---------------------------------------------------------------------------

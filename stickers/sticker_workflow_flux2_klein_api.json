@@ -1,0 +1,71 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": { "unet_name": "flux2-klein-base-9b-fp8.safetensors", "weight_dtype": "default" }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": { "clip_name": "flux2_klein_qwen3_text_encoder.safetensors", "type": "flux2" }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "flux2_vae.safetensors" }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "sticker_input.png" }
+  },
+  "5": {
+    "class_type": "VAEEncode",
+    "inputs": { "pixels": ["4", 0], "vae": ["3", 0] }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["2", 0],
+      "text": "die-cut sticker illustration of SUBJECT, cartoon style, bold clean outlines, vibrant flat colors, cute, expressive, centered, plain white background, keep the same face and identity as the reference image"
+    }
+  },
+  "7": {
+    "class_type": "ReferenceLatent",
+    "inputs": { "conditioning": ["6", 0], "latent": ["5", 0] }
+  },
+  "9": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": ["2", 0],
+      "text": "text, letters, watermark, signature, blurry, lowres, busy background, frame, cropped"
+    }
+  },
+  "10": {
+    "class_type": "FluxGuidance",
+    "inputs": { "conditioning": ["7", 0], "guidance": 2.5 }
+  },
+  "11": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": { "width": 1024, "height": 1024, "batch_size": 1 }
+  },
+  "12": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["10", 0],
+      "negative": ["9", 0],
+      "latent_image": ["11", 0],
+      "seed": 0,
+      "steps": 20,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "13": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["12", 0], "vae": ["3", 0] }
+  },
+  "8": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["13", 0], "filename_prefix": "sticker/stylized" }
+  }
+}
