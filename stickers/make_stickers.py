@@ -1,13 +1,14 @@
-"""Turn an input image into transparent WebP stickers with a funny caption.
+"""Turn an input image into transparent WebP stickers with a short reaction caption.
 
 Pipeline per sticker:
-  1. Caption  - Ollama vision model describes the image and writes funny texts
-  2. Stylize  - ComfyUI SDXL img2img turns it into a cartoon sticker (optional)
+  1. Caption  - Ollama vision model picks a reaction, an expression/pose to draw and (optionally) a text
+  2. Stylize  - ComfyUI turns it into a cartoon sticker acting out that reaction (optional)
   3. Cut out  - rembg removes the background
-  4. Compose  - white die-cut outline + meme text, 512x512 transparent WebP
+  4. Compose  - white die-cut outline + text in a style cycled per sticker (or no text at all),
+                512x512 transparent WebP
 
 Usage (via 2-stickers.bat, which uses ComfyUI's embedded Python):
-  2-stickers.bat photo.jpg [--count 3] [--lang German] [--text "Custom text"]
+  2-stickers.bat photo.jpg [--count 3] [--lang German] [--text "Custom text"] [--no-text]
                            [--engine sdxl] [--strength 0.55] [--no-stylize] [--seed 42]
 
 Stylize engines (--engine):
@@ -42,11 +43,19 @@ COMFY_DIR = HERE.parent / "ComfyUI_windows_portable" / "ComfyUI"
 COMFY_URL = "http://127.0.0.1:8188"
 OLLAMA_URL = "http://127.0.0.1:11434"
 VISION_MODEL = "qwen3-vl:4b"
-FONT = Path("C:/Windows/Fonts/impact.ttf")
+FONTS = Path("C:/Windows/Fonts")
 
 SIZE = 512          # sticker canvas (WhatsApp/Telegram spec)
 BORDER = 10         # white die-cut outline in px
 MAX_BYTES = 100_000  # WhatsApp limit for static stickers
+
+# Cycled per sticker so a batch doesn't look like the same meme template over and over.
+TEXT_STYLES = [
+    {"font": FONTS / "impact.ttf", "fill": "white", "stroke": "black", "placement": "bottom"},
+    {"font": FONTS / "comicbd.ttf", "fill": "#FFD400", "stroke": "black", "placement": "bottom"},
+    {"font": FONTS / "segoeprb.ttf", "fill": "white", "stroke": "#E8397A", "placement": "top"},
+    {"font": FONTS / "ariblk.ttf", "fill": "black", "stroke": None, "badge": "white", "placement": "bottom"},
+]
 
 ENGINES = {
     "sdxl": "sticker_workflow_api.json",
@@ -79,10 +88,11 @@ def caption(img, count, lang):
     prompt = (
         "Look at this image. Reply with JSON only, in this exact shape: "
         '{"subject": "<short English description of the main subject for an image generator, max 15 words>", '
-        f'"captions": [<{count} different short reaction-sticker texts in {lang}, 1-3 words each, '
-        "like chat-sticker classics: \"Hi there!\", \"Yes!\", \"Nope\", \"Thank youuuu\", \"Wait, what?\", "
-        "\"Please?\", \"Oh no!\", \"Kisses!\" - punchy everyday reactions/exclamations that fit this image; "
-        "no hashtags, no emojis>]}"
+        f'"stickers": [<{count} different reaction-sticker ideas, each '
+        '{"expression": "<how the subject should pose or look to act out the reaction, for an image generator, max 12 words>", '
+        f'"text": "<a short reaction-sticker text in {lang}, 1-3 words, like chat-sticker classics: '
+        '\\"Hi there!\\", \\"Yes!\\", \\"Nope\\", \\"Thank youuuu\\", \\"Wait, what?\\", \\"Please?\\", \\"Oh no!\\", \\"Kisses!\\" '
+        '- or an empty string if the pose already says it without text; no hashtags, no emojis>}>]}'
     )
     payload = {
         "model": VISION_MODEL,
@@ -99,12 +109,17 @@ def caption(img, count, lang):
         payload.pop("think")  # model without thinking support
         res = http_json(f"{OLLAMA_URL}/api/chat", payload)
     data = json.loads(res["message"]["content"])
-    caps = [str(c).strip() for c in data.get("captions", []) if str(c).strip()]
-    return str(data.get("subject", "the subject")).strip(), caps
+    stickers = [
+        {"expression": str(s.get("expression", "")).strip(), "text": str(s.get("text", "")).strip()}
+        for s in data.get("stickers", []) if isinstance(s, dict)
+    ]
+    return str(data.get("subject", "the subject")).strip(), stickers
 
 
 # ---------------------------------------------------------------- 2. stylize
-def stylize(img, subject, seed, strength, idx, engine):
+def stylize(img, subject, expression, seed, strength, idx, engine):
+    if expression:
+        subject = f"{subject}, {expression}"
     # Pre-scale to ~1 megapixel, multiples of 64 (fits SDXL and the DiT edit models alike)
     scale = (1024 * 1024 / (img.width * img.height)) ** 0.5
     w, h = max(64, round(img.width * scale / 64) * 64), max(64, round(img.height * scale / 64) * 64)
@@ -162,15 +177,15 @@ def cut_out(img):
 
 
 # ---------------------------------------------------------------- 4. compose
-def fit_text(draw, text, max_w, max_h):
-    """Largest Impact size where the text (wrapped to <= 2 lines) fits max_w x max_h."""
+def fit_text(draw, text, font_path, has_stroke, max_w, max_h):
+    """Largest size where the text (wrapped to <= 2 lines) fits max_w x max_h."""
     words = text.upper().split()
     candidates = [[" ".join(words)]]
     for i in range(1, len(words)):
         candidates.append([" ".join(words[:i]), " ".join(words[i:])])
     for size in range(96, 17, -2):
-        font = ImageFont.truetype(str(FONT), size)
-        stroke = max(3, size // 12)
+        font = ImageFont.truetype(str(font_path), size)
+        stroke = max(3, size // 12) if has_stroke else 0
         best = None
         for lines in candidates:
             widths = [draw.textbbox((0, 0), l, font=font, stroke_width=stroke)[2] for l in lines]
@@ -182,18 +197,20 @@ def fit_text(draw, text, max_w, max_h):
                     best = (score, lines)
         if best:
             return font, stroke, best[1]
-    return ImageFont.truetype(str(FONT), 18), 3, [" ".join(words)]
+    return ImageFont.truetype(str(font_path), 18), 3 if has_stroke else 0, [" ".join(words)]
 
 
-def compose(cutout, text):
+def compose(cutout, text, style):
     canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     pad = BORDER + 6
     text_h = int(SIZE * 0.26) if text else 0
+    top = text and style["placement"] == "top"
 
-    # Subject: fit into the area above the text (it may overlap the text a bit)
+    # Subject: fit into the area on the other side of the text band (may overlap it a bit)
     area_w, area_h = SIZE - 2 * pad, SIZE - 2 * pad - int(text_h * 0.6)
     subj = ImageOps.contain(cutout, (area_w, area_h), Image.LANCZOS)
-    x, y = (SIZE - subj.width) // 2, pad + (area_h - subj.height) // 2
+    subj_top = pad + int(text_h * 0.6) if top else pad
+    x, y = (SIZE - subj.width) // 2, subj_top + (area_h - subj.height) // 2
 
     layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     layer.paste(subj, (x, y), subj)
@@ -208,12 +225,16 @@ def compose(cutout, text):
 
     if text:
         draw = ImageDraw.Draw(canvas)
-        font, stroke, lines = fit_text(draw, text, SIZE - 2 * pad, text_h)
+        font, stroke, lines = fit_text(draw, text, style["font"], style["stroke"] is not None, SIZE - 2 * pad, text_h)
         line_h = font.size * 1.08 + stroke
-        ty = SIZE - pad - len(lines) * line_h
+        ty = pad if top else SIZE - pad - len(lines) * line_h
         for line in lines:
             w = draw.textbbox((0, 0), line, font=font, stroke_width=stroke)[2]
-            draw.text(((SIZE - w) / 2, ty), line, font=font, fill="white", stroke_width=stroke, stroke_fill="black")
+            tx = (SIZE - w) / 2
+            if style.get("badge"):
+                draw.rounded_rectangle((tx - 14, ty - 6, tx + w + 14, ty + font.size * 1.08 + 6),
+                                        radius=16, fill=style["badge"])
+            draw.text((tx, ty), line, font=font, fill=style["fill"], stroke_width=stroke, stroke_fill=style["stroke"])
             ty += line_h
     return canvas
 
@@ -235,6 +256,7 @@ def main():
     ap.add_argument("--count", type=int, default=3, help="number of stickers (default 3)")
     ap.add_argument("--lang", default="English", help="caption language (default English)")
     ap.add_argument("--text", action="append", help="use this caption instead of the LLM (repeatable)")
+    ap.add_argument("--no-text", action="store_true", help="no text on any sticker, just the stylized image")
     ap.add_argument("--engine", choices=list(ENGINES), default="sdxl", help="stylize engine, see above (default sdxl)")
     ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); sdxl/photomaker only")
     ap.add_argument("--no-stylize", action="store_true", help="skip ComfyUI, only cut out the original")
@@ -246,20 +268,23 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     seed = args.seed if args.seed is not None else random.randint(0, 2**31)
 
-    # 1. captions
-    subject, caps = "the subject", []
+    # 1. captions - each sticker gets an "expression" (how the subject should pose to act out the
+    # reaction, feeds the stylize prompt) and a "text" (may be empty, the pose can speak for itself)
+    subject, stickers = "the subject", []
     if args.text:
-        caps = args.text
+        stickers = [{"expression": "", "text": t} for t in args.text]
     if not args.text or not args.no_stylize:
         if reachable(OLLAMA_URL):
             print(f"[caption] asking {VISION_MODEL} ...")
-            subject, llm_caps = caption(src, args.count, args.lang)
-            caps = caps or llm_caps
+            subject, llm_stickers = caption(src, args.count, args.lang)
+            stickers = stickers or llm_stickers
             print(f"[caption] subject: {subject}")
         else:
             print("[caption] Ollama not reachable - no captions")
-    caps = (caps or [""]) * args.count
+    stickers = (stickers or [{"expression": "", "text": ""}]) * args.count
     count = len(args.text) if args.text else args.count
+    if args.no_text:
+        stickers = [{**s, "text": ""} for s in stickers]
 
     stylize_on = not args.no_stylize
     if stylize_on and not reachable(COMFY_URL):
@@ -268,16 +293,17 @@ def main():
 
     stem = args.image.stem
     for i in range(count):
+        expression, text = stickers[i]["expression"], stickers[i]["text"]
         base = src
         if stylize_on:
             print(f"[stylize] sticker {i + 1}/{count} (seed {seed + i}, engine {args.engine}) ...")
-            base = stylize(src, subject, seed + i, args.strength, i, args.engine)
+            base = stylize(src, subject, expression, seed + i, args.strength, i, args.engine)
         print(f"[cutout ] sticker {i + 1}/{count} ...")
         cut = cut_out(base)
-        sticker = compose(cut, caps[i])
+        sticker = compose(cut, text, TEXT_STYLES[i % len(TEXT_STYLES)])
         path = args.out / f"{stem}_sticker_{i + 1}.webp"
         size, q = save_webp(sticker, path)
-        print(f"[done   ] {path}  \"{caps[i]}\"  ({size // 1024} KB, q={q})")
+        print(f"[done   ] {path}  \"{text}\"  ({size // 1024} KB, q={q})")
 
 
 if __name__ == "__main__":
