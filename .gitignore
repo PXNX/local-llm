@@ -30,3 +30,7 @@ topvideos/downloads/
 topvideos/out/
 topvideos/scores.json
 topvideos/run.log
+
+# Generated image-to-video clips (10-image-to-video.bat)
+img2video/out/
+img2video/out_test/
