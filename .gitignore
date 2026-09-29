@@ -22,8 +22,8 @@ characters/videos/
 # Generated caricatures and objects (7-caricatures.bat, 8-objects.bat)
 caricatures/out/
 
-# Top-5 videos (9-top5-videos.bat): login secrets, downloads, output
-topvideos/telegram.ini
+# Secrets (.env.example is the committed template) and top-5 videos (9-top5-videos.bat): session, downloads, output
+.env
 topvideos/*.session
 topvideos/*.session-journal
 topvideos/downloads/

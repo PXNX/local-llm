@@ -10,8 +10,9 @@ it are ranked (AI score + engagement bonus) -> ffmpeg renders intro card, then #
 a title card + the clip (blurred fill background, rank badge, loudness normalized) -> one MP4.
 
 Telegram login: create an app at https://my.telegram.org -> API development tools, put api_id
-and api_hash into topvideos/telegram.ini (see telegram.ini.example). The first run asks for your
-phone number + login code once, the session is kept in topvideos/telegram.session (keep it private).
+and api_hash (and the two-step verification password, if any) into the repo's .env (see
+.env.example). The first run shows a QR code to scan in the Telegram app once, the session is
+kept in topvideos/telegram.session (keep it private).
 You must be subscribed to (or have opened) the channels so their numeric IDs can be resolved.
 
 Usage (via 9-top5-videos.bat, which uses ComfyUI's embedded Python):
@@ -19,7 +20,6 @@ Usage (via 9-top5-videos.bat, which uses ComfyUI's embedded Python):
 """
 import argparse
 import base64
-import configparser
 import datetime as dt
 import io
 import json
@@ -35,6 +35,7 @@ import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = Path(__file__).resolve().parent
+ENV_FILE = HERE.parent / ".env"
 OUT_DIR = HERE / "out"
 DL_DIR = HERE / "downloads"
 CACHE = HERE / "scores.json"
@@ -64,11 +65,110 @@ def read_channels(path):
     return chans
 
 
+def load_env(path):
+    """KEY=value lines from the repo's .env (# comments, optional quotes); real env vars win."""
+    import os
+
+    env = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip().strip("'\"")
+    env.update({k: v for k, v in os.environ.items() if k.startswith("TELEGRAM_")})
+    return env
+
+
 def load_cache():
     return json.loads(CACHE.read_text(encoding="utf-8")) if CACHE.exists() else {}
 
 
 # ---------------------------------------------------------------- 1. Telegram
+CODE_WHERE = {
+    "SentCodeTypeApp": "as a message in your Telegram app (chat 'Telegram' with the blue tick, on phone or desktop)",
+    "SentCodeTypeSms": "by SMS",
+    "SentCodeTypeFragmentSms": "by SMS via Fragment",
+    "SentCodeTypeFirebaseSms": "by SMS",
+    "SentCodeTypeCall": "by phone call",
+    "SentCodeTypeFlashCall": "by a missed call (the code is the last digits of the calling number)",
+    "SentCodeTypeMissedCall": "by a missed call (the code is the last digits of the calling number)",
+    "SentCodeTypeEmailCode": "by e-mail (the address set up in Telegram)",
+    "SentCodeTypeSetUpEmailRequired": "nowhere yet - Telegram wants a login e-mail set up first, use --login qr",
+}
+
+
+async def finish_2fa(client, password=None):
+    import getpass
+
+    from telethon.errors import PasswordHashInvalidError
+
+    if password:
+        try:
+            await client.sign_in(password=password)
+            print("[login] two-step verification: used TELEGRAM_PASSWORD from .env")
+            return
+        except PasswordHashInvalidError:
+            print("[login] TELEGRAM_PASSWORD in .env is wrong.")
+    print("\n[login] Two-step verification is on: type your Telegram cloud password and press Enter.")
+    print("        (the characters are not shown while typing)")
+    while True:
+        try:
+            await client.sign_in(password=getpass.getpass("Password: "))
+            return
+        except PasswordHashInvalidError:
+            print("[login] wrong password, try again.")
+
+
+async def login(client, mode, password=None):
+    """One-time login. qr: scan with the Telegram app, no code needed. code: phone number + login code."""
+    from telethon import functions
+    from telethon.errors import SessionPasswordNeededError
+
+    try:
+        await client(functions.updates.GetStateRequest())
+    except SessionPasswordNeededError:
+        # QR/code was already accepted in an earlier run, only the 2FA password is missing
+        await finish_2fa(client, password)
+        mode = None
+    except Exception:
+        pass
+    if mode is None:
+        pass
+    elif mode == "qr":
+        import os
+        import qrcode
+
+        png = HERE / "login_qr.png"
+        print("[login] On your phone: Telegram > Settings > Devices > Link Desktop Device, then scan the QR code.")
+        qr = await client.qr_login()
+        try:
+            while True:
+                qrcode.make(qr.url).save(png)
+                os.startfile(png)
+                try:
+                    await qr.wait(timeout=qr.expires.timestamp() - dt.datetime.now().timestamp() - 1)
+                    break
+                except TimeoutError:
+                    print("[login] QR code expired, showing a new one ...")
+                    await qr.recreate()
+        except SessionPasswordNeededError:
+            await finish_2fa(client, password)
+        finally:
+            png.unlink(missing_ok=True)
+    else:
+        phone = input("Phone number (international, e.g. +49...): ").strip()
+        sent = await client.send_code_request(phone)
+        kind = type(sent.type).__name__
+        print(f"[login] Telegram sent the code {CODE_WHERE.get(kind, f'({kind})')}.")
+        try:
+            await client.sign_in(phone, input("Login code: ").strip(), phone_code_hash=sent.phone_code_hash)
+        except SessionPasswordNeededError:
+            await finish_2fa(client, password)
+    me = await client.get_me()
+    print(f"[login] logged in as {me.first_name} - session saved, no login needed next time.")
+
+
 async def resolve(client, ref):
     from telethon.tl.types import PeerChannel
 
@@ -356,13 +456,12 @@ def concat(parts, out):
 async def run(args):
     from telethon import TelegramClient
 
-    cfg = configparser.ConfigParser()
-    ini = HERE / "telegram.ini"
-    if not ini.exists():
-        sys.exit(f"Missing {ini}. Copy telegram.ini.example to telegram.ini and fill in api_id/api_hash "
-                 "from https://my.telegram.org (API development tools).")
-    cfg.read(ini, encoding="utf-8")
-    api_id, api_hash = cfg.getint("telegram", "api_id"), cfg.get("telegram", "api_hash")
+    env = load_env(ENV_FILE)
+    if not env.get("TELEGRAM_API_ID") or not env.get("TELEGRAM_API_HASH"):
+        sys.exit(f"Missing TELEGRAM_API_ID / TELEGRAM_API_HASH in {ENV_FILE}. Copy .env.example to .env and fill "
+                 "them in from https://my.telegram.org (API development tools).")
+    api_id, api_hash = int(env["TELEGRAM_API_ID"]), env["TELEGRAM_API_HASH"]
+    args.password = env.get("TELEGRAM_PASSWORD") or None
     channels = args.channel or read_channels(HERE / "channels.txt")
     if not channels:
         sys.exit("No channels: add IDs/usernames to topvideos/channels.txt or pass --channel.")
@@ -374,7 +473,19 @@ async def run(args):
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     cache = load_cache()
 
-    async with TelegramClient(str(HERE / "telegram"), api_id, api_hash) as client:
+    import sqlite3
+
+    client = TelegramClient(str(HERE / "telegram"), api_id, api_hash)
+    try:
+        await client.connect()
+    except sqlite3.OperationalError as e:
+        if "locked" not in str(e):
+            raise
+        sys.exit("The Telegram login (topvideos\\telegram.session) is in use by another run of this script. "
+                 "Wait until it has finished (or close its window) and start again.")
+    if not await client.is_user_authorized():
+        await login(client, args.login, args.password)
+    async with client:
         cands = await collect(client, channels, since, args)
         if len(cands) < args.count and not args.hours:
             print(f"[info ] only {len(cands)} video(s) since midnight, widening to the last 24 h")
@@ -471,6 +582,8 @@ def main():
                     help="auto = whichever theme has the stronger top 5 today (default)")
     ap.add_argument("--subject", help='only clips about this, e.g. "animals", "cats", "babies"')
     ap.add_argument("--channel", action="append", help="channel ID or @username (repeatable, overrides channels.txt)")
+    ap.add_argument("--login", choices=["qr", "code"], default="qr",
+                    help="first login: qr = scan a QR code with the Telegram app (default), code = phone + login code")
     ap.add_argument("--hours", type=float, help="look back this many hours instead of 'since midnight'")
     ap.add_argument("--count", type=int, default=5, help="places in the ranking (default 5)")
     ap.add_argument("--max-candidates", type=int, default=25, help="download/rate at most this many clips (default 25)")
@@ -489,6 +602,8 @@ def main():
     ap.add_argument("--nvenc", action="store_true", help="encode on the GPU (needs NVIDIA driver >= 570)")
     ap.add_argument("--keep-work", action="store_true", help="keep the intermediate cards/clips")
     args = ap.parse_args()
+    # channel names/captions contain emojis, which the Windows console codepage can't print
+    sys.stdout.reconfigure(errors="replace")
     args.count = max(2, min(5, args.count))
 
     import asyncio
