@@ -29,3 +29,4 @@ topvideos/*.session-journal
 topvideos/downloads/
 topvideos/out/
 topvideos/scores.json
+topvideos/run.log
