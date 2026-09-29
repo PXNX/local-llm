@@ -6,9 +6,11 @@ cd /d "%~dp0"
 set "COMFY_VER=v0.37.0"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
-echo === Ollama + OpenCode (winget)
+echo === Ollama + OpenCode + Deno (winget)
 winget list --id Ollama.Ollama -e >nul 2>&1 || winget install --id Ollama.Ollama -e --silent --accept-package-agreements --accept-source-agreements
 winget list --id SST.opencode -e >nul 2>&1 || winget install --id SST.opencode -e --silent --accept-package-agreements --accept-source-agreements
+rem Deno: JavaScript runtime yt-dlp needs for YouTube (6-characters.bat)
+winget list --id DenoLand.Deno -e >nul 2>&1 || winget install --id DenoLand.Deno -e --silent --accept-package-agreements --accept-source-agreements
 
 rem Large context with little VRAM (applies after Ollama restarts)
 setx OLLAMA_CONTEXT_LENGTH 32768 >nul
@@ -31,11 +33,11 @@ if not exist "%PY%" (
   del ComfyUI_windows_portable_nvidia.7z
 )
 
-echo === ComfyUI-GGUF node + sticker/vectorize dependencies
+echo === ComfyUI-GGUF node + sticker/vectorize/character dependencies
 if not exist "ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF" (
   git clone --depth 1 https://github.com/city96/ComfyUI-GGUF ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF
 )
-"%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]" vtracer
+"%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]" vtracer yt-dlp scikit-learn
 
 echo.
 echo Done. Next steps:
