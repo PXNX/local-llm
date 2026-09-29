@@ -9,5 +9,8 @@ download-models.log
 # Sticker output
 stickers/out/
 
+# Sound effect output
+soundfx/out/
+
 __pycache__/
 *.pyc
