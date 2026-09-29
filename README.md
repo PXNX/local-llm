@@ -29,17 +29,20 @@ The OpenCode config template is `config/opencode.json`.
 | `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`topvideos\telegram.ini`) and Ollama (`qwen3-vl:4b` rates the clips). Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
-- `--count 5` number of stickers (each with a different caption and variant)
+- `--count 5` number of stickers (each with a different reaction, pose and text style)
 - `--lang German` caption language
-- `--text "My text"` your own caption (repeatable, one per sticker)
+- `--text "My text"` your own caption (repeatable, one per sticker), skips the LLM for text
+- `--no-text` no text on any sticker, just the stylized image acting out the reaction
 - `--engine sdxl` stylize engine, see below, default `sdxl`
 - `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55 (`sdxl`/`photomaker` only)
 - `--no-stylize` no ComfyUI, only cut out the original (works without the driver update)
 
-Pipeline: `qwen3-vl:4b` (Ollama) describes the image and writes short reaction-style captions
-("Hi there!", "Nope", "Thank youuuu" ...), then ComfyUI turns it into a cartoon sticker version
-(`--engine`, below), then rembg removes the background, then white outline + Impact text, then
-512x512 WebP < 100 KB (WhatsApp/Telegram).
+Pipeline: `qwen3-vl:4b` (Ollama) picks a reaction per sticker - a pose/expression for the subject to
+act it out (e.g. "waving, big cheerful smile" for a greeting) plus a short text or none at all
+("Hi there!", "Nope", "Thank youuuu" ...) - then ComfyUI draws the subject acting out that reaction
+(`--engine`, below), then rembg removes the background, then a white outline plus the text (font,
+color and placement cycle through a few styles across the batch, see `TEXT_STYLES` in
+`stickers/make_stickers.py`), then 512x512 WebP < 100 KB (WhatsApp/Telegram).
 
 Stylize engines (`stickers/sticker_workflow_*_api.json`, can also be dragged into ComfyUI):
 | engine | needs | notes |

@@ -4,6 +4,7 @@ rem   Drag & drop an image onto this file, or double-click it and pick an image.
 rem   Extra options are passed through, e.g.:
 rem     2-stickers.bat photo.jpg --count 5 --lang German
 rem     2-stickers.bat photo.jpg --text "Monday mood" --no-stylize
+rem     2-stickers.bat photo.jpg --no-text   (just the stylized image, no caption)
 rem     2-stickers.bat photo.jpg --engine photomaker   (better resemblance to the photo, needs
 rem                                                      models\photomaker\photomaker-v2.bin)
 setlocal
