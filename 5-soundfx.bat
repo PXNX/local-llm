@@ -4,6 +4,7 @@ rem   and process the "Slava Ukraini" voice line into soundfx\out\. Fully local 
 rem   no Ollama/ComfyUI needed. Extra options are passed through, e.g.:
 rem     5-soundfx.bat --count 5 --seed 42
 rem     5-soundfx.bat --voice "C:\path\to\voice.wav"
+rem     5-soundfx.bat --speech "C:\path\to\clip.mp3"   (strip background, keep speech only)
 setlocal
 cd /d "%~dp0"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
