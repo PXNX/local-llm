@@ -96,8 +96,9 @@ def caption(img, count, lang, texts=None):
     prompt = (
         "Look at this image. Reply with JSON only, in this exact shape: "
         '{"subject": "<English description of the main animal or person so an illustrator can draw the same '
-        'individual again: species/breed, fur or hair colors and markings, eye color, distinctive features '
-        '(beard, glasses, ...) - only the look, no pose, no facial expression or mood, no background, max 30 words>", '
+        'individual again: species/breed, exact fur or hair color tones (cool silver-beige vs warm cream ...) and '
+        'coat pattern and markings (colorpoint with a solid dark face mask, tabby stripes, tuxedo, solid ...), fur length and texture, face shape, eye color, age, distinctive features '
+        '(beard, glasses, ...) - only the look, no pose, no facial expression or mood, no background, max 40 words>", '
         + (f'"stickers": [<one entry per text, in this order: {json.dumps(texts, ensure_ascii=False)}, each '
            if texts else f'"stickers": [<{count} different reaction-sticker ideas, each ') +
         '{"expression": "<a specific, exaggerated pose/face that unmistakably acts out that exact emotion for an '
@@ -207,6 +208,42 @@ def cut_out(img):
     return rgba.crop(bbox) if bbox else rgba
 
 
+_M = np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]])
+_WHITE = _M.sum(axis=1)
+
+
+def rgb_to_lab(rgb):
+    c = rgb / 255.0
+    xyz = np.where(c > 0.04045, ((c + 0.055) / 1.055) ** 2.4, c / 12.92) @ _M.T / _WHITE
+    f = np.where(xyz > 0.008856, np.cbrt(xyz), 7.787 * xyz + 16 / 116)
+    return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], axis=-1)
+
+
+def lab_to_rgb(lab):
+    fy = (lab[..., 0] + 16) / 116
+    f = np.stack([fy + lab[..., 1] / 500, fy, fy - lab[..., 2] / 200], axis=-1)
+    xyz = np.where(f > 0.2069, f ** 3, (f - 16 / 116) / 7.787) * _WHITE
+    c = np.clip(xyz @ np.linalg.inv(_M).T, 0, 1)
+    return np.clip(np.where(c > 0.0031308, 1.055 * c ** (1 / 2.4) - 0.055, 12.92 * c) * 255, 0, 255)
+
+
+def match_colors(cut, ref, amount=(0.5, 0.85, 0.85)):
+    """Pull the drawn character's colors (Lab, per channel) toward the real subject's cutout from the
+    photo - FLUX drifts to warm browns/creams. Median/MAD so a red heart or doodle barely skews it."""
+    def stats(lab, mask):
+        px = lab[mask]
+        med = np.median(px, axis=0)
+        return med, np.maximum(np.median(np.abs(px - med), axis=0), 1e-3)
+    arr = np.asarray(cut).astype(float)
+    ref_arr = np.asarray(ref).astype(float)
+    lab, ref_lab = rgb_to_lab(arr[..., :3]), rgb_to_lab(ref_arr[..., :3])
+    (m, s), (rm, rs) = stats(lab, arr[..., 3] > 128), stats(ref_lab, ref_arr[..., 3] > 128)
+    k = np.array(amount)
+    target = rm + (lab - m) * np.clip(rs / s, 0.6, 1.5)
+    out = lab_to_rgb(lab + (target - lab) * k)
+    return Image.fromarray(np.dstack([out, arr[..., 3]]).astype(np.uint8), "RGBA")
+
+
 # ---------------------------------------------------------------- 4. compose
 def load_font(path, size):
     font = ImageFont.truetype(str(path), size)
@@ -301,11 +338,13 @@ def main():
     ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); sdxl/photomaker only")
     ap.add_argument("--no-stylize", action="store_true", help="skip ComfyUI, only cut out the original")
     ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--out", type=Path, default=HERE / "out")
+    ap.add_argument("--out", type=Path, default=HERE / "out", help="output folder, gets one subfolder per input image")
     args = ap.parse_args()
 
     src = ImageOps.exif_transpose(Image.open(args.image)).convert("RGB")
-    args.out.mkdir(parents=True, exist_ok=True)
+    stem = args.image.stem
+    out_dir = args.out / stem
+    out_dir.mkdir(parents=True, exist_ok=True)
     seed = args.seed if args.seed is not None else random.randint(0, 2**31)
 
     # 1. captions - each sticker gets an "expression" (how the subject should pose to act out the
@@ -339,8 +378,10 @@ def main():
     if stylize_on and not reachable(COMFY_URL):
         print("[stylize] ComfyUI not running (start-comfyui.bat) - using original image")
         stylize_on = False
+    # the real subject cut out of the photo: color reference for the drawn stickers
+    ref = cut_out(src) if stylize_on else None
 
-    stem = args.image.stem
+    made = []
     for i in range(count):
         expression, text = stickers[i]["expression"], stickers[i]["text"]
         base = src
@@ -350,10 +391,15 @@ def main():
             base = stylize(src, subject, expression, seed if expression else seed + i, args.strength, i, args.engine)
         print(f"[cutout ] sticker {i + 1}/{count} ...")
         cut = cut_out(base)
+        if ref is not None:
+            cut = match_colors(cut, ref)
         sticker = compose(cut, text, TEXT_STYLES[seed % len(TEXT_STYLES)])
-        path = args.out / f"{stem}_sticker_{i + 1}.webp"
+        path = out_dir / f"{stem}_sticker_{i + 1}.webp"
         size, q = save_webp(sticker, path)
         print(f"[done   ] {path}  \"{text}\"  ({size // 1024} KB, q={q})")
+        made.append({"file": path.name, "text": text, "expression": expression})
+    # text + pose per sticker, animate_stickers.py picks a matching loop from it
+    (out_dir / "stickers.json").write_text(json.dumps(made, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 if __name__ == "__main__":
