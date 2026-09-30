@@ -1,10 +1,11 @@
 @echo off
-rem Flow 2: image -> transparent WebP stickers with short reaction text (Hi there!, Nope, ...).
+rem Flow 2: image -> transparent WebP stickers of the pictured animal/person acting out reactions (no text by default).
 rem   Drag & drop an image onto this file, or double-click it and pick an image.
 rem   Extra options are passed through, e.g.:
-rem     2-stickers.bat photo.jpg --count 5 --lang German
+rem     2-stickers.bat photo.jpg --count 5
+rem     2-stickers.bat photo.jpg --with-text --lang German   (the vision model adds a short text)
 rem     2-stickers.bat photo.jpg --text "Monday mood" --no-stylize
-rem     2-stickers.bat photo.jpg --no-text   (just the stylized image, no caption)
+rem   By default the stickers have no text, just the character acting out each reaction.
 rem   Animate the results for Telegram afterwards with 11-animate-stickers.bat.
 rem   Default engine is flux1 (FLUX.1 schnell draws the photographed animal/person as a near-
 rem   photorealistic sticker acting out each reaction; one look + text style per batch) - SDXL is broken on this ComfyUI build (gray-square
@@ -38,11 +39,14 @@ echo %* | find /i "--no-stylize" >nul || (
   )
 )
 
-rem ---- run
+rem ---- run - without text on the stickers unless --with-text or --text "..." is given
+set "TEXTOPT=--no-text"
+echo %* | find /i "--with-text" >nul && set "TEXTOPT="
+echo %* | find /i "--text" >nul && set "TEXTOPT="
 if "%~1"=="" (
-  "%PY%" -s "%~dp0stickers\make_stickers.py" "%IMG%"
+  "%PY%" -s "%~dp0stickers\make_stickers.py" "%IMG%" %TEXTOPT%
 ) else (
-  "%PY%" -s "%~dp0stickers\make_stickers.py" %*
+  "%PY%" -s "%~dp0stickers\make_stickers.py" %* %TEXTOPT%
 )
 if errorlevel 1 ( echo. & echo Something went wrong, see the output above. & pause & exit /b 1 )
 

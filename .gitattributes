@@ -1,5 +1,36 @@
 * text=auto
 # cmd.exe misparses labels/goto in LF-only batch files
 *.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
 *.sh  text eol=lf
+*.py  text eol=lf
+*.rs  text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md  text eol=lf
+Cargo.lock text eol=lf -diff linguist-generated
+
+# binaries: never touch line endings, no text diffs
 *.jpg binary
+*.jpeg binary
+*.png binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.svg text eol=lf
+*.ttf binary
+*.otf binary
+*.wav binary
+*.mp3 binary
+*.mp4 binary
+*.webm binary
+*.gguf binary
+*.safetensors binary
+*.bin binary
+*.onnx binary
+*.7z binary
+*.zip binary
+*.exe binary

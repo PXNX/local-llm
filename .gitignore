@@ -34,3 +34,27 @@ topvideos/run.log
 # Generated image-to-video clips (10-image-to-video.bat)
 img2video/out/
 img2video/out_test/
+
+# Private config - never commit (keys live in .env, GUI settings in %APPDATA%\local-llm-gui)
+.env.*
+!.env.example
+*.session
+*.session-journal
+topvideos/login_qr.png
+ComfyUI_windows_portable/ComfyUI/extra_model_paths.yaml
+
+# Downloaded Fluent Emoji (re-downloaded on demand)
+topvideos/emoji_cache/
+
+# Rust GUI build output
+# Rust build output (any crate)
+target/
+
+# Logs and editor/OS files
+*.log
+*.part
+.vscode/
+.idea/
+.claude/settings.local.json
+Thumbs.db
+desktop.ini

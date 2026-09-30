@@ -1,7 +1,7 @@
 """Turn an input image into transparent WebP stickers with a short reaction caption.
 
 Pipeline per sticker:
-  1. Caption  - Ollama vision model picks a reaction, an expression/pose to draw and (optionally) a text
+  1. Caption  - vision LLM (OpenRouter or local Ollama, see common/llm.py) picks a reaction, an expression/pose to draw and (optionally) a text
   2. Stylize  - ComfyUI draws the same animal/person as a cartoonish sticker acting out that
                 reaction (optional); the photo only defines who to draw, not the composition
   3. Cut out  - rembg removes the background
@@ -29,7 +29,6 @@ Stylize engines (--engine):
                 models/vae/flux2_vae.safetensors. Large model, slow without a lot of VRAM.
 """
 import argparse
-import base64
 import io
 import json
 import random
@@ -45,10 +44,11 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from scipy import ndimage
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from common import llm  # noqa: E402
+
 COMFY_DIR = HERE.parent / "ComfyUI_windows_portable" / "ComfyUI"
 COMFY_URL = "http://127.0.0.1:8188"
-OLLAMA_URL = "http://127.0.0.1:11434"
-VISION_MODEL = "qwen3-vl:4b"
 FONTS = Path("C:/Windows/Fonts")
 FREDOKA = HERE / "fonts" / "Fredoka.ttf"  # OFL, rounded bold like classic chat stickers
 
@@ -97,7 +97,7 @@ def caption(img, count, lang, texts=None):
         "Look at this image. Reply with JSON only, in this exact shape: "
         '{"subject": "<English description of the main animal or person so an illustrator can draw the same '
         'individual again: species/breed, exact fur or hair color tones (cool silver-beige vs warm cream ...) and '
-        'coat pattern and markings (colorpoint with a solid dark face mask, tabby stripes, tuxedo, solid ...), fur length and texture, face shape, eye color, age, distinctive features '
+        'coat pattern and markings (colorpoint with a solid dark face mask, tabby stripes, tuxedo, solid ...) and their exact shade (charcoal gray-black vs chocolate brown), fur length and texture, face shape, eye color, age, distinctive features '
         '(beard, glasses, ...) - only the look, no pose, no facial expression or mood, no background, max 40 words>", '
         + (f'"stickers": [<one entry per text, in this order: {json.dumps(texts, ensure_ascii=False)}, each '
            if texts else f'"stickers": [<{count} different reaction-sticker ideas, each ') +
@@ -112,23 +112,10 @@ def caption(img, count, lang, texts=None):
            '\\"Hi there!\\", \\"Yes!\\", \\"Nope\\", \\"Thank youuuu\\", \\"Wait, what?\\", \\"Please?\\", \\"Oh no!\\", \\"Kisses!\\" '
            '- or an empty string if the pose already says it without text; no hashtags, no emojis>}>]}')
     )
-    payload = {
-        "model": VISION_MODEL,
-        "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(buf.getvalue()).decode()]}],
-        "format": "json",
-        "stream": False,
-        "think": False,
-        "keep_alive": 0,  # free the VRAM right away for ComfyUI
-        # Ollama defaults to a 32k context: its KV cache pushes half the model onto the CPU on 6 GB.
-        # qwen3-vl still thinks despite think=False, so leave room for thinking + answer.
-        "options": {"temperature": 0.9, "num_ctx": 6144, "num_predict": 3000},
-    }
-    try:
-        res = http_json(f"{OLLAMA_URL}/api/chat", payload)
-    except urllib.error.HTTPError:
-        payload.pop("think")  # model without thinking support
-        res = http_json(f"{OLLAMA_URL}/api/chat", payload)
-    data = json.loads(res["message"]["content"])
+    # Ollama defaults to a 32k context: its KV cache pushes half the model onto the CPU on 6 GB.
+    # qwen3-vl still thinks despite think=False, so leave room for thinking + answer.
+    data = llm.vision_json(prompt, buf.getvalue(), temperature=0.9,
+                           ollama_options={"num_ctx": 6144, "num_predict": 3000})
     stickers = [
         {"expression": str(s.get("expression", "")).strip(), "text": str(s.get("text", "")).strip()}
         for s in data.get("stickers", []) if isinstance(s, dict)
@@ -227,7 +214,7 @@ def lab_to_rgb(lab):
     return np.clip(np.where(c > 0.0031308, 1.055 * c ** (1 / 2.4) - 0.055, 12.92 * c) * 255, 0, 255)
 
 
-def match_colors(cut, ref, amount=(0.5, 0.85, 0.85)):
+def match_colors(cut, ref, amount=(0.5, 1.0, 1.0)):
     """Pull the drawn character's colors (Lab, per channel) toward the real subject's cutout from the
     photo - FLUX drifts to warm browns/creams. Median/MAD so a red heart or doodle barely skews it."""
     def stats(lab, mask):
@@ -239,8 +226,12 @@ def match_colors(cut, ref, amount=(0.5, 0.85, 0.85)):
     lab, ref_lab = rgb_to_lab(arr[..., :3]), rgb_to_lab(ref_arr[..., :3])
     (m, s), (rm, rs) = stats(lab, arr[..., 3] > 128), stats(ref_lab, ref_arr[..., 3] > 128)
     k = np.array(amount)
-    target = rm + (lab - m) * np.clip(rs / s, 0.6, 1.5)
-    out = lab_to_rgb(lab + (target - lab) * k)
+    # lightness keeps most of its contrast, color spread may shrink a lot (FLUX saturates browns)
+    target = rm + (lab - m) * np.clip(rs / s, [0.6, 0.25, 0.25], 1.5)
+    # strongly colored doodles (red heart, pink hearts ...) are no fur - leave them mostly alone
+    chroma = np.hypot(lab[..., 1] - m[1], lab[..., 2] - m[2])
+    keep = np.clip((chroma - 30) / 20, 0, 1)[..., None]
+    out = lab_to_rgb(lab + (target - lab) * k * (1 - keep))
     return Image.fromarray(np.dstack([out, arr[..., 3]]).astype(np.uint8), "RGBA")
 
 
@@ -276,6 +267,8 @@ def fit_text(draw, text, font_path, has_stroke, max_w, max_h):
 
 
 def compose(cutout, text, style):
+    """Returns (sticker, character layer, text layer) - the layers let animate_stickers.py move the body
+    while the text stays put."""
     canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     pad = BORDER + 6
     text_h = int(SIZE * 0.26) if text else 0
@@ -297,6 +290,8 @@ def compose(cutout, text, style):
     canvas.paste((0, 0, 0, 255), (0, 3), shadow)
     canvas.paste((255, 255, 255, 255), (0, 0), outline)
     canvas.alpha_composite(layer)
+    char = canvas
+    canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
 
     if text:
         draw = ImageDraw.Draw(canvas)
@@ -313,7 +308,7 @@ def compose(cutout, text, style):
             draw.text((tx, ty), line, font=font, fill="white", stroke_width=stroke + 5, stroke_fill="white")
             draw.text((tx, ty), line, font=font, fill=style["fill"], stroke_width=stroke, stroke_fill=style["stroke"])
             ty += line_h
-    return canvas
+    return Image.alpha_composite(char, canvas), char, canvas
 
 
 def save_webp(img, path):
@@ -334,6 +329,8 @@ def main():
     ap.add_argument("--lang", default="English", help="caption language (default English)")
     ap.add_argument("--text", action="append", help="use this caption instead of the LLM (repeatable)")
     ap.add_argument("--no-text", action="store_true", help="no text on any sticker, just the stylized image")
+    ap.add_argument("--with-text", action="store_true",
+                    help="let the vision model add a short text (the default here; 2-stickers.bat passes --no-text without it)")
     ap.add_argument("--engine", choices=list(ENGINES), default="flux1", help="stylize engine, see above (default flux1)")
     ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); sdxl/photomaker only")
     ap.add_argument("--no-stylize", action="store_true", help="skip ComfyUI, only cut out the original")
@@ -353,13 +350,13 @@ def main():
     if args.text:
         stickers = [{"expression": "", "text": t} for t in args.text]
     if not args.text or not args.no_stylize:
-        if reachable(OLLAMA_URL):
-            if reachable(COMFY_URL):
+        if llm.available():
+            if llm.is_local() and reachable(COMFY_URL):
                 # ComfyUI keeps FLUX in VRAM after a run; on 6 GB the vision model then crawls into a timeout
                 req = urllib.request.Request(f"{COMFY_URL}/free", data=b'{"unload_models": true, "free_memory": true}',
                                              headers={"Content-Type": "application/json"})
                 urllib.request.urlopen(req, timeout=30).read()
-            print(f"[caption] asking {VISION_MODEL} ...")
+            print(f"[caption] asking {llm.label()} ...")
             subject, llm_stickers = caption(src, args.count, args.lang, args.text)
             if args.text:  # keep the given texts, take the poses the model picked for them
                 for s, l in zip(stickers, llm_stickers):
@@ -368,7 +365,7 @@ def main():
                 stickers = llm_stickers
             print(f"[caption] subject: {subject}")
         else:
-            print("[caption] Ollama not reachable - no captions")
+            print("[caption] vision LLM not available (no OPENROUTER_API_KEY / Ollama not running) - no captions")
     stickers = (stickers or [{"expression": "", "text": ""}]) * args.count
     count = len(args.text) if args.text else args.count
     if args.no_text:
@@ -393,12 +390,16 @@ def main():
         cut = cut_out(base)
         if ref is not None:
             cut = match_colors(cut, ref)
-        sticker = compose(cut, text, TEXT_STYLES[seed % len(TEXT_STYLES)])
+        sticker, char, text_layer = compose(cut, text, TEXT_STYLES[seed % len(TEXT_STYLES)])
         path = out_dir / f"{stem}_sticker_{i + 1}.webp"
         size, q = save_webp(sticker, path)
         print(f"[done   ] {path}  \"{text}\"  ({size // 1024} KB, q={q})")
-        made.append({"file": path.name, "text": text, "expression": expression})
-    # text + pose per sticker, animate_stickers.py picks a matching loop from it
+        (out_dir / "layers").mkdir(exist_ok=True)
+        char.save(out_dir / "layers" / f"{path.stem}_character.png")
+        text_layer.save(out_dir / "layers" / f"{path.stem}_text.png")
+        made.append({"file": path.name, "text": text, "expression": expression,
+                     "character": f"layers/{path.stem}_character.png", "text_layer": f"layers/{path.stem}_text.png"})
+    # text + pose + layers per sticker, animate_stickers.py picks a matching loop and moves only the body
     (out_dir / "stickers.json").write_text(json.dumps(made, indent=2, ensure_ascii=False), encoding="utf-8")
 
 

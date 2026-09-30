@@ -1,0 +1,33 @@
+[package]
+name = "local-llm-gui"
+version = "0.1.0"
+edition = "2024"
+description = "One window for all local-llm flows: inputs, env vars, models and servers"
+license = "MIT"
+
+[[bin]]
+name = "local-llm"
+path = "src/main.rs"
+
+[dependencies]
+const_format = "0.2.36"
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "links"] }
+egui_extras = { version = "0.36.2", default-features = false, features = ["svg"] }
+material-design-icons = "7.4.48"
+nvml-wrapper = "0.13.0"
+open = "5.4.4"
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+tungstenite = "0.30.0"
+ureq = { version = "3.4.2", features = ["json"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
