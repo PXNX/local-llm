@@ -218,6 +218,7 @@ fn log_view(ui: &mut egui::Ui, h: &JobHandle) {
 fn log_line(ui: &mut egui::Ui, line: &Line) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add(egui::Label::new(RichText::new(format!("{} ", line.time)).monospace().weak()));
         let base = if line.err { Some(AMBER) } else { None };
         for (text, color, target) in segments(line) {
             let rich = RichText::new(text).monospace();
@@ -303,7 +304,12 @@ mod tests {
 
     #[test]
     fn links_and_paths_are_found() {
-        let line = Line { text: r"[dl   ] https://t.me/budyarchive/123 -> C:\out\a.mp4 done".into(), err: false, colors: Vec::new() };
+        let line = Line {
+            time: "00:00:00".into(),
+            text: r"[dl   ] https://t.me/budyarchive/123 -> C:\out\a.mp4 done".into(),
+            err: false,
+            colors: Vec::new(),
+        };
         let segs = segments(&line);
         let urls: Vec<&str> = segs.iter().filter(|(_, _, t)| matches!(t, Some(Target::Url(_)))).map(|(s, _, _)| *s).collect();
         let paths: Vec<&str> = segs.iter().filter(|(_, _, t)| matches!(t, Some(Target::Path(_)))).map(|(s, _, _)| *s).collect();

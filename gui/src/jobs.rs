@@ -16,6 +16,7 @@ const REPAINT: Duration = Duration::from_millis(80);
 
 /// One log line: plain text plus the colored ranges its ANSI escape codes asked for.
 pub struct Line {
+    pub time: String,
     pub text: String,
     pub err: bool,
     pub colors: Vec<(usize, usize, egui::Color32)>,
@@ -85,15 +86,16 @@ impl Job {
         if !err {
             self.progress.parse(&text);
         }
+        let time = sys::now_hms();
         if progress && self.last_progress && !self.lines.is_empty() {
             // tqdm-style "\r" progress: overwrite the previous progress line instead of scrolling
             let last = self.lines.back_mut().expect("non-empty");
-            *last = Line { text, err, colors };
+            *last = Line { time, text, err, colors };
         } else {
             if self.lines.len() == MAX_LINES {
                 self.lines.pop_front();
             }
-            self.lines.push_back(Line { text, err, colors });
+            self.lines.push_back(Line { time, text, err, colors });
         }
         self.last_progress = progress;
     }
@@ -188,6 +190,7 @@ fn run(ctx: &egui::Context, h: &JobHandle, l: Launch) -> State {
         ctx.request_repaint_after(REPAINT);
     };
     let mut log_mut = log;
+    log_mut(format!("[input] {}", h.job.lock().unwrap().command));
     for server in &l.servers {
         if let Err(e) = servers::ensure(*server, &l.root, &h.cancel, &mut log_mut) {
             return if h.cancel.load(Ordering::Relaxed) { State::Cancelled } else { State::Failed(e) };

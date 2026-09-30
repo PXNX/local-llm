@@ -73,5 +73,13 @@
     { "model": "gpt-oss:20b", "group": "Coding (3-coding-llm-t3code.bat)", "used_by": "T3 Code / OpenCode", "size": 13800000000 },
     { "model": "qwen3-coder:30b", "group": "Coding (3-coding-llm-t3code.bat)", "used_by": "T3 Code / OpenCode", "size": 18600000000 },
     { "model": "hf.co/JetBrains/Qwen3.8-3.6-27B-blend-GGUF:IQ3_S", "group": "Coding (3-coding-llm-t3code.bat)", "used_by": "T3 Code / OpenCode", "size": 13533766221 }
+  ],
+  "local": [
+    { "id": "kokoro-onnx", "group": "Kokoro-82M (comedy voices)", "used_by": "Comedy",
+      "dir": "comedy/models", "file": "kokoro-v1.0.onnx", "size": 325532387,
+      "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx" },
+    { "id": "kokoro-voices", "group": "Kokoro-82M (comedy voices)", "used_by": "Comedy",
+      "dir": "comedy/models", "file": "voices-v1.0.bin", "size": 28214398,
+      "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin" }
   ]
 }
