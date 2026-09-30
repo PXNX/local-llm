@@ -19,7 +19,7 @@ The OpenCode config template is `config/opencode.json`.
 | `setup.bat` | One-time install of the tools (see above) |
 | `0-download-all.bat` | Downloads/resumes all models (Ollama + ComfyUI). Safe to re-run. |
 | `1-image-video-comfyui.bat` | Frees VRAM (stops Ollama models), starts ComfyUI, opens the browser |
-| `2-stickers.bat` | Image -> 3 transparent WebP stickers with funny text. Drag & drop an image onto it or double-click and pick one. Starts Ollama + ComfyUI automatically. Result: `stickers\out\` |
+| `2-stickers.bat` | Image -> 3 transparent WebP stickers with funny text. Drag & drop an image onto it or double-click and pick one. Starts Ollama + ComfyUI automatically. Result: `stickers\out\<image name>\` |
 | `3-coding-llm-t3code.bat` | Starts Ollama, preloads `qwen3:8b` and opens T3 Code. `3-coding-llm-t3code.bat gpt-oss:20b` for a different model, `... qwen3:8b cli` for OpenCode in the terminal |
 | `4-vectorize.bat` | PNG/JPG -> SVG vector trace (like vectorizer.ai / Vector Magic). Drag & drop an image onto it or double-click and pick one. Fully local (`vtracer`), no Ollama/ComfyUI needed. Result: an `.svg` next to the input image |
 | `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line; `--speech clip.mp3` strips a recording down to speech only. Fully local (numpy/scipy synthesis, Demucs for speech), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
@@ -28,6 +28,7 @@ The OpenCode config template is `config/opencode.json`.
 | `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
 | `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`.env`) and Ollama (`qwen3-vl:4b` rates the clips). Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
 | `10-image-to-video.bat` | Image -> short animated MP4 clip (the image is the first frame). Drag & drop an image onto it or double-click and pick one. `qwen3-vl:4b` writes the motion prompt unless you give `--prompt`. Wan 2.2 TI2V 5B in ComfyUI (already downloaded), roughly 10-30 min per clip. Starts Ollama + ComfyUI automatically. Result: `img2video\out\` |
+| `11-animate-stickers.bat` | Stickers from Flow 2 -> animated Telegram video stickers (WebM VP9 with transparency, 512 px, max 3 s, max 256 KB). Drag & drop a sticker folder (`stickers\out\<image name>\`) or `.webp` files onto it, or double-click and pick a folder. Default: a looping motion that matches each text (seconds, no GPU); `--mode ai` animates with Wan 2.2 instead. Result: `<sticker>.webm` next to each sticker |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different reaction and pose; one character look and text style per batch)
@@ -42,11 +43,22 @@ Pipeline: `qwen3-vl:4b` (Ollama) describes the look of the animal/person in the 
 markings, eyes ...) and picks a reaction per sticker - face plus body action to act it out (e.g.
 "waving one paw with a big open-mouthed smile" for a greeting, optionally with a doodle like hearts or
 zzz) plus a short text or none at all ("Hi there!", "Nope", "Thank youuuu" ...) - then ComfyUI draws
-that same character as a cartoonish semi-realistic sticker acting out the reaction (`--engine`, below;
-the photo only defines who to draw, not the composition), then rembg removes the background, then a
-white die-cut outline plus the text in rounded Fredoka (`stickers/fonts/`, OFL). All stickers of one
+that same character as a near-photorealistic sticker acting out the reaction (`--engine`, below;
+the photo only defines who to draw, not the composition), then rembg removes the background, the
+colors are pulled toward the real subject cut out of the photo, then a white die-cut outline plus the text in rounded Fredoka (`stickers/fonts/`, OFL). All stickers of one
 input share the seed and one text style (`TEXT_STYLES` in `stickers/make_stickers.py`), so a batch
-reads as one sticker pack. Output: 512x512 WebP < 100 KB (WhatsApp/Telegram), one sticker per file.
+reads as one sticker pack. Output: 512x512 WebP < 100 KB (WhatsApp/Telegram), one sticker per file, in
+`stickers\out\<image name>\` plus a `stickers.json` with each sticker's text and pose.
+
+### Animated sticker options (`11-animate-stickers.bat <sticker folder or files> [options]`)
+- `--motion pulse` loop type: `bounce`, `wobble`, `pulse`, `float`, `shake`; default `auto` picks it from
+  the sticker's text/pose in `stickers.json` (pulse for love, float for tired, wobble for hi, shake for oh no ...)
+- `--seconds 2` clip length, max 3 (Telegram limit)
+- `--mode ai` Wan 2.2 TI2V 5B in ComfyUI animates the sticker itself (the pose from `stickers.json`, or
+  `--prompt "the cat waves its paw"`), then rembg cuts out every frame - real motion, roughly 10-30 min per
+  sticker, the baked-in text may wobble a little; `--steps 20`, `--seed 0`
+- The `.webm` files are ready for Telegram's @Stickers bot (`/newvideo`); the encoder raises the
+  compression until each file is under 256 KB.
 
 Stylize engines (`stickers/sticker_workflow_*_api.json`, can also be dragged into ComfyUI):
 | engine | needs | notes |
