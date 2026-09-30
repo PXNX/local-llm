@@ -212,6 +212,22 @@ class Library:
         return added
 
 
+def vectorize_all(out_dir):
+    """Cut out (rembg, the screenshots have scene backgrounds) and trace every screenshot without
+    an SVG yet: <name>.jpg -> <name>_cutout.png + <name>_cutout.svg. Run at the end so it also
+    covers folders that were renamed/merged by hand."""
+    sys.path.insert(0, str(HERE.parent / "caricatures"))
+    from make_caricatures import cut_out, vectorize
+
+    todo = [p for p in sorted(out_dir.rglob("*.jpg")) if not p.with_name(p.stem + "_cutout.svg").exists()]
+    for n, jpg in enumerate(todo, 1):
+        png = jpg.with_name(jpg.stem + "_cutout.png")
+        cut_out(Image.open(jpg).convert("RGB"), plain_background=False).save(png)
+        vectorize(png, png.with_suffix(".svg"))
+        print(f"[trace] {n}/{len(todo)} {png.with_suffix('.svg').relative_to(out_dir)}")
+    print(f"[trace] {len(todo)} traced to SVG")
+
+
 def read_names(path):
     names = {}
     if path.exists():
@@ -266,6 +282,8 @@ def main():
     ap.add_argument("--names", type=Path, default=HERE / "names.txt", help="character list (default characters/names.txt)")
     ap.add_argument("--out", type=Path, default=HERE / "out", help="output folder (default characters/out)")
     ap.add_argument("--reprocess", action="store_true", help="also process videos that were already processed")
+    ap.add_argument("--vectorize", action="store_true",
+                    help="afterwards cut out and trace all screenshots in the output folder to SVG (rembg + vtracer)")
     args = ap.parse_args()
 
     videos = []
@@ -287,6 +305,8 @@ def main():
     todo = [v for v in dict.fromkeys(videos) if args.reprocess or v.stem not in done]
     if not todo:
         print("[done ] no new videos (use --reprocess to redo)")
+        if args.vectorize:
+            vectorize_all(args.out)
         return 0
 
     models = Models()
@@ -308,6 +328,8 @@ def main():
         print(f"[scan ] {n}/{len(todo)} {path.name}: {found} character crops")
     if not crops:
         print("[done ] no characters found")
+        if args.vectorize:
+            vectorize_all(args.out)
         return 0
 
     print(f"[embed] {len(crops)} crops")
@@ -343,6 +365,8 @@ def main():
         f.writelines(v.stem + "\n" for v in todo)
     print(f"[done ] {args.out}")
     print("        Move/rename character_NN folders into the names.txt folders, later runs sort into them.")
+    if args.vectorize:
+        vectorize_all(args.out)
     return 0
 
 

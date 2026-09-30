@@ -16,9 +16,9 @@ rem ComfyUI shares the 6 GB VRAM - the detector runs much faster with it closed
 curl.exe -s -o nul http://127.0.0.1:8188/ && echo Note: ComfyUI is running, close it if this runs out of VRAM.
 
 if "%~1"=="" (
-  "%PY%" -s "%~dp0characters\extract_characters.py" "%URL%"
+  "%PY%" -s "%~dp0characters\extract_characters.py" "%URL%" --vectorize
 ) else (
-  "%PY%" -s "%~dp0characters\extract_characters.py" %*
+  "%PY%" -s "%~dp0characters\extract_characters.py" %* --vectorize
 )
 if errorlevel 1 ( echo. & echo Something went wrong, see the output above. & pause & exit /b 1 )
 

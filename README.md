@@ -23,7 +23,7 @@ The OpenCode config template is `config/opencode.json`.
 | `3-coding-llm-t3code.bat` | Starts Ollama, preloads `qwen3:8b` and opens T3 Code. `3-coding-llm-t3code.bat gpt-oss:20b` for a different model, `... qwen3:8b cli` for OpenCode in the terminal |
 | `4-vectorize.bat` | PNG/JPG -> SVG vector trace (like vectorizer.ai / Vector Magic). Drag & drop an image onto it or double-click and pick one. Fully local (`vtracer`), no Ollama/ComfyUI needed. Result: an `.svg` next to the input image |
 | `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line; `--speech clip.mp3` strips a recording down to speech only. Fully local (numpy/scipy synthesis, Demucs for speech), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
-| `6-characters.bat` | YouTube channel/playlist/video -> screenshots of the recurring characters in distinct poses/expressions, one folder per character. Double-click and enter a URL (default `@freeonis`). Fully local (yt-dlp + OWLv2 + CLIP). Result: `characters\out\<name>\` |
+| `6-characters.bat` | YouTube channel/playlist/video -> screenshots of the recurring characters in distinct poses/expressions, one folder per character. Double-click and enter a URL (default `@freeonis`). Fully local (yt-dlp + OWLv2 + CLIP). `--vectorize` (default in the launcher) also cuts out (rembg) and traces every screenshot to `*_cutout.svg`. Result: `characters\out\<name>\` |
 | `7-caricatures.bat` | Famous people (`--who "Emmanuel Macron"`) or yourself (drag & drop a photo) as original flat 2D political-cartoon caricatures in 6 expressions, optionally transparent + SVG. Starts ComfyUI (+ Ollama for photos). Result: `caricatures\out\<name>\` |
 | `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
 | `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`.env`) and Ollama (`qwen3-vl:4b` rates the clips). Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
@@ -101,10 +101,12 @@ merge by hand. Lowering `--match` merges more but files wrong characters (e.g. a
 
 ### Caricature / object options (`7-caricatures.bat` / `8-objects.bat`)
 - `--who "Name"` / `--thing "object"` (repeatable), `--photo me.jpg --name Felix` caricature from a photo
-  (qwen3-vl describes the look, SDXL img2img), `--features "grey hair, glasses"` extra look hints
+  (qwen3-vl describes the look, FLUX.1 img2img), `--features "grey hair, glasses"` extra look hints
 - `--variant "..."` own expressions/poses or views/states instead of the built-in list, `--count 3` fewer images
 - `--strength 0.75` photo img2img: 0.5 close to the photo ... 0.9 free cartoon
-- `--cutout` transparent PNG (rembg), `--vectorize` SVG via vtracer ("logo" preset, of the cutout if given)
+- `--cutout` transparent PNG, `--vectorize` SVG via vtracer ("logo" preset); `--vectorize` implies `--cutout`,
+  and the launchers (7/8) trace to SVG by default. The cutout flood-fills the plain white background (keeps
+  white parts inside the drawing, hard alpha for a clean trace) and falls back to rembg otherwise
 
 The look is described in the prompt (flat 2D satire cartoon, big round head, thick outlines, pastel
 colors, `caricatures/caricature_workflow_api.json`, can be dragged into ComfyUI); it draws new caricatures
@@ -114,8 +116,9 @@ and does not copy any channel's character designs.
 stays near zero at every sampling step, regardless of ComfyUI version, PyTorch version (tested
 2.6.0 through 2.14.0), CUDA build, or attention backend; matches unresolved upstream issues
 Comfy-Org/ComfyUI#13116 and #15137. FLUX.1/2 and Qwen-Image are unaffected (same GPU, same install),
-so `2-stickers.bat` now defaults to the `flux1` engine instead. Flows 7/8 still use SDXL and need
-either that upstream bug fixed or switching to a FLUX-based workflow like `stickers` did.
+so `2-stickers.bat` and flows 7/8 (`caricature_workflow_api.json`) use FLUX.1 schnell (~1-1.5 min per image on
+the RTX 2060). Close other GPU users first (e.g. a loaded Ollama model: `ollama ps`), otherwise generation
+crawls.
 
 ### Image-to-video options (`10-image-to-video.bat photo.jpg [options]`)
 - `--prompt "the dog wags its tail, slow zoom in"` what should move and how the camera moves (English works best, repeatable, one per clip); without it `qwen3-vl:4b` looks at the image and writes one

@@ -15,14 +15,14 @@ rem ---- arguments: none -> ask, a single image file -> --photo, else pass throu
 set "ARGS=%*"
 if "%~1"=="" (
   set /p "WHO=Who should be drawn (e.g. Emmanuel Macron)? "
-  set /p "VEC=Also vectorize to SVG? [y/N] "
+  set /p "VEC=Also trace to SVG? [Y/n] "
 )
 if "%~1"=="" (
   if not defined WHO ( echo Nobody given. & pause & exit /b 1 )
   set ARGS=--who "%WHO%"
-  if /i "%VEC%"=="y" set ARGS=--who "%WHO%" --cutout --vectorize
+  if /i not "%VEC%"=="n" set ARGS=--who "%WHO%" --vectorize
 )
-if exist "%~1" set ARGS=--photo %*
+if exist "%~1" set ARGS=--photo %* --vectorize
 
 rem ---- Ollama describes the look for --photo
 echo %ARGS% | find /i "--photo" >nul && (
