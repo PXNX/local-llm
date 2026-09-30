@@ -15,7 +15,6 @@ Usage (via 7-caricatures.bat, which uses ComfyUI's embedded Python):
 Result: caricatures/out/<name>/<name>_<variant>_<seed>.png (+ .svg)
 """
 import argparse
-import base64
 import io
 import json
 import random
@@ -31,8 +30,9 @@ from PIL import Image, ImageOps
 HERE = Path(__file__).resolve().parent
 COMFY_DIR = HERE.parent / "ComfyUI_windows_portable" / "ComfyUI"
 COMFY_URL = "http://127.0.0.1:8188"
-OLLAMA_URL = "http://127.0.0.1:11434"
-VISION_MODEL = "qwen3-vl:4b"
+sys.path.insert(0, str(HERE.parent))
+from common import llm  # noqa: E402
+
 
 STYLE = ("simple flat 2D political satire cartoon, thick black outlines, flat pastel colors, "
          "minimal shading, centered, plain white background, no text, no letters, no watermark")
@@ -82,21 +82,7 @@ def describe(img):
     prompt = ("Describe this person's most recognizable visual features for a caricature artist, "
               "in max 20 English words: gender, age, hair (color, style), facial hair, glasses, "
               "face shape, typical clothing. Reply with JSON only: {\"features\": \"...\"}")
-    payload = {
-        "model": VISION_MODEL,
-        "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(buf.getvalue()).decode()]}],
-        "format": "json",
-        "stream": False,
-        "think": False,
-        "keep_alive": 0,  # free the VRAM right away for ComfyUI
-        "options": {"temperature": 0.2},
-    }
-    try:
-        res = http_json(f"{OLLAMA_URL}/api/chat", payload)
-    except urllib.error.HTTPError:
-        payload.pop("think")  # model without thinking support
-        res = http_json(f"{OLLAMA_URL}/api/chat", payload)
-    return str(json.loads(res["message"]["content"]).get("features", "")).strip()
+    return str(llm.vision_json(prompt, buf.getvalue(), temperature=0.2).get("features", "")).strip()
 
 
 # ---------------------------------------------------------------- 2. draw
@@ -211,8 +197,8 @@ def main():
     if args.photo:
         photo = ImageOps.exif_transpose(Image.open(args.photo)).convert("RGB")
         feats = ""
-        if reachable(OLLAMA_URL):
-            print(f"[looks  ] asking {VISION_MODEL} ...")
+        if llm.available():
+            print(f"[looks  ] asking {llm.label()} ...")
             feats = describe(photo)
             print(f"[looks  ] {feats}")
         jobs.append((slug(args.name or args.photo.stem), PERSON, feats or "a person", photo))

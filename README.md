@@ -13,28 +13,53 @@ setup.bat          & rem Ollama, OpenCode, ComfyUI portable + GGUF node + rembg,
 Not in git (installed by the scripts): `ComfyUI_windows_portable/` and all models.
 The OpenCode config template is `config/opencode.json`.
 
+## GUI - one window for all flows (`gui/`)
+`local-llm.exe` runs every flow below with a form instead of command-line options. Download it from the
+[GitHub releases](https://github.com/PXNX/local-llm/releases) (built by `.github/workflows/gui.yml` on every
+`v*` tag) or build it: `cd gui && cargo build --release` -> `gui\target\release\local-llm.exe`. Put it anywhere; it
+finds this folder next to itself or asks for it (and can clone it on a fresh PC).
+- **Start page**: setup checklist (ComfyUI/Python, NVIDIA driver >= 580, vision AI key, models, Telegram) with one-click fixes, the run queue and CPU/RAM/GPU/VRAM usage.
+- **Flows**: when a flow is picked, missing `.env` values and models are asked for right away. One flow runs at a time (the GPU gets everything); runs started meanwhile wait in the queue. Progress (item x/y, ComfyUI sampler steps), elapsed time and ETA next to Cancel; the log shows colors, and links / file paths in it are clickable (Top 5 prints the `t.me` link of every post).
+- **Models**: everything the flows need, what is on disk, resumable downloads with progress. Nothing is fetched twice: `.done` markers (same as `download-models.sh`), hard links for files that exist under another name, and ComfyUI files that are byte-identical to an Ollama blob are shared (sha256). ComfyUI and Ollama models can live in one folder on any drive (Settings > Model storage).
+- Starts Ollama/ComfyUI when a flow needs them (Ollama with low-VRAM settings), runs itself at below-normal priority and draws nothing while idle, so the models get the machine.
+- GUI settings live in `%APPDATA%\local-llm-gui\`, keys in the git-ignored `.env` - nothing private is committed.
+
+## Vision AI: OpenRouter (free) or local Ollama
+Captions (stickers), clip ratings (top 5), looks (caricatures) and motion prompts (image to video) all go through
+`common/llm.py`. Set in `.env` (or in the GUI's Settings):
+```
+LLM_PROVIDER=openrouter             # or ollama
+OPENROUTER_API_KEY=sk-or-v1-...     # https://openrouter.ai/keys
+OPENROUTER_MODEL=qwen/qwen3.8-27b:free
+OPENROUTER_FALLBACKS=google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+LLM_LOCAL_FALLBACK=1                # when every OpenRouter model fails: local OLLAMA_MODEL (qwen3-vl:4b)
+```
+Free models are often rate limited; up to 3 fallbacks are tried in order, then the local model. OpenRouter needs no
+GPU memory, so ComfyUI keeps its models loaded between runs.
+
 ## Quick start - one .bat per flow
 | File | What it does |
 |---|---|
 | `setup.bat` | One-time install of the tools (see above) |
 | `0-download-all.bat` | Downloads/resumes all models (Ollama + ComfyUI). Safe to re-run. |
 | `1-image-video-comfyui.bat` | Frees VRAM (stops Ollama models), starts ComfyUI, opens the browser |
-| `2-stickers.bat` | Image -> 3 transparent WebP stickers with funny text. Drag & drop an image onto it or double-click and pick one. Starts Ollama + ComfyUI automatically. Result: `stickers\out\<image name>\` |
+| `2-stickers.bat` | Image -> 3 transparent WebP stickers of the pictured animal/person acting out reactions, no text by default (`--with-text` adds a short one). Drag & drop an image onto it or double-click and pick one. Starts Ollama + ComfyUI automatically. Result: `stickers\out\<image name>\` |
 | `3-coding-llm-t3code.bat` | Starts Ollama, preloads `qwen3:8b` and opens T3 Code. `3-coding-llm-t3code.bat gpt-oss:20b` for a different model, `... qwen3:8b cli` for OpenCode in the terminal |
 | `4-vectorize.bat` | PNG/JPG -> SVG vector trace (like vectorizer.ai / Vector Magic). Drag & drop an image onto it or double-click and pick one. Fully local (`vtracer`), no Ollama/ComfyUI needed. Result: an `.svg` next to the input image |
 | `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line; `--speech clip.mp3` strips a recording down to speech only. Fully local (numpy/scipy synthesis, Demucs for speech), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
 | `6-characters.bat` | YouTube channel/playlist/video -> screenshots of the recurring characters in distinct poses/expressions, one folder per character. Double-click and enter a URL (default `@freeonis`). Fully local (yt-dlp + OWLv2 + CLIP). `--vectorize` (default in the launcher) also cuts out (rembg) and traces every screenshot to `*_cutout.svg`. Result: `characters\out\<name>\` |
 | `7-caricatures.bat` | Famous people (`--who "Emmanuel Macron"`) or yourself (drag & drop a photo) as original flat 2D political-cartoon caricatures in 6 expressions, optionally transparent + SVG. Starts ComfyUI (+ Ollama for photos). Result: `caricatures\out\<name>\` |
 | `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
-| `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`.env`) and Ollama (`qwen3-vl:4b` rates the clips). Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
-| `10-image-to-video.bat` | Image -> short animated MP4 clip (the image is the first frame). Drag & drop an image onto it or double-click and pick one. `qwen3-vl:4b` writes the motion prompt unless you give `--prompt`. Wan 2.2 TI2V 5B in ComfyUI (already downloaded), roughly 10-30 min per clip. Starts Ollama + ComfyUI automatically. Result: `img2video\out\` |
-| `11-animate-stickers.bat` | Stickers from Flow 2 -> animated Telegram video stickers (WebM VP9 with transparency, 512 px, max 3 s, max 256 KB). Drag & drop a sticker folder (`stickers\out\<image name>\`) or `.webp` files onto it, or double-click and pick a folder. Default: a looping motion that matches each text (seconds, no GPU); `--mode ai` animates with Wan 2.2 instead. Result: `<sticker>.webm` next to each sticker |
+| `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`.env`) and the vision AI (OpenRouter or Ollama, rates the clips). Fluent Emoji (Iconify) on the cards and thumbnail; every processed post is logged with its `t.me` link. Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
+| `10-image-to-video.bat` | Image -> short animated MP4 clip (the image is the first frame). Drag & drop an image onto it or double-click and pick one. The vision AI writes the motion prompt unless you give `--prompt`. `--res 480p|720p|1080p|1440p|4k` (above 720p the clip is upscaled from Wan's 720p maximum). Wan 2.2 TI2V 5B in ComfyUI (already downloaded), roughly 10-30 min per clip. Starts Ollama + ComfyUI automatically. Result: `img2video\out\` |
+| `11-animate-stickers.bat` | Stickers from Flow 2 -> animated Telegram video stickers (WebM VP9 with transparency, 512 px, max 3 s, max 256 KB). Drag & drop a sticker folder (`stickers\out\<image name>\`) or `.webp` files onto it, or double-click and pick a folder. Default: a looping body motion that matches each reaction (seconds, no GPU); `--mode ai` animates with Wan 2.2 instead. Result: `<sticker>.webm` next to each sticker |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different reaction and pose; one character look and text style per batch)
 - `--lang German` caption language
+- `--with-text` the vision model adds a short reaction text ("Hi there!", "Nope" ...); without it the
+  bat passes `--no-text` (the Python script itself still writes text unless `--no-text` is given)
 - `--text "My text"` your own caption (repeatable, one per sticker), skips the LLM for text
-- `--no-text` no text on any sticker, just the stylized image acting out the reaction
 - `--engine flux1` stylize engine, see below, default `flux1`
 - `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55 (`sdxl`/`photomaker` only)
 - `--no-stylize` no ComfyUI, only cut out the original (works without the driver update)
@@ -48,15 +73,17 @@ the photo only defines who to draw, not the composition), then rembg removes the
 colors are pulled toward the real subject cut out of the photo, then a white die-cut outline plus the text in rounded Fredoka (`stickers/fonts/`, OFL). All stickers of one
 input share the seed and one text style (`TEXT_STYLES` in `stickers/make_stickers.py`), so a batch
 reads as one sticker pack. Output: 512x512 WebP < 100 KB (WhatsApp/Telegram), one sticker per file, in
-`stickers\out\<image name>\` plus a `stickers.json` with each sticker's text and pose.
+`stickers\out\<image name>\` plus a `stickers.json` with each sticker's text and pose and `layers\` (character and text separately, for Flow 11).
 
 ### Animated sticker options (`11-animate-stickers.bat <sticker folder or files> [options]`)
-- `--motion pulse` loop type: `bounce`, `wobble`, `pulse`, `float`, `shake`; default `auto` picks it from
-  the sticker's text/pose in `stickers.json` (pulse for love, float for tired, wobble for hi, shake for oh no ...)
+- `--motion sway` loop type: `sway`, `breathe`, `hop`, `tremble`; default `auto` picks it from the sticker's
+  text/pose in `stickers.json` (sway for love/hi, breathe for tired, tremble for oh no, hop for yes ...).
+  The body is bent, not moved as a stiff picture: feet stay planted, the lean grows towards the head,
+  breathing lifts the chest; the text layer stays still on top
 - `--seconds 2` clip length, max 3 (Telegram limit)
 - `--mode ai` Wan 2.2 TI2V 5B in ComfyUI animates the sticker itself (the pose from `stickers.json`, or
   `--prompt "the cat waves its paw"`), then rembg cuts out every frame - real motion, roughly 10-30 min per
-  sticker, the baked-in text may wobble a little; `--steps 20`, `--seed 0`
+  sticker, the text is added afterwards so it stays still; `--steps 20`, `--seed 0`
 - The `.webm` files are ready for Telegram's @Stickers bot (`/newvideo`); the encoder raises the
   compression until each file is under 256 KB.
 
@@ -238,7 +265,8 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   | gpt-oss:20b | ~13 GB | GPU + CPU, usable |
   | qwen3-coder:30b | ~19 GB | MoE, mostly CPU/RAM, slow, pushes RAM to the limit |
   | qwen3.8-blend:27b | ~12.6 GB | [JetBrains Qwen3.8/3.6 27B blend](https://huggingface.co/collections/JetBrains/qwen38-36-27b-blend), IQ3_S from `hf.co/JetBrains/Qwen3.8-3.6-27B-blend-GGUF:IQ3_S`. Dense 27B, strongest coder here but slowest (~1-3 tokens/s, mostly CPU). Q4_K_M (16.8 GB) does not fit in 16 GB RAM |
-- **OpenCode** (winget `SST.opencode`), config: `%USERPROFILE%\.config\opencode\opencode.json`
+- **OpenCode** (bun global install, package `opencode-ai`; winget's `SST.opencode` package lags
+  upstream and can't self-update), config: `%USERPROFILE%\.config\opencode\opencode.json`
   (provider `ollama`, OpenAI-compatible endpoint `/v1`).
 - **T3 Code**: OpenCode provider enabled with binaryPath (`providerInstances.opencode`) in
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code, pick the model under the

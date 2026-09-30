@@ -1,7 +1,7 @@
 """Extract recurring characters from YouTube videos (e.g. a political cartoon channel) as
 screenshots, one folder per character, keeping only distinct poses / facial expressions.
 
-Pipeline: yt-dlp downloads the videos (video only, <=720p) -> frames are sampled every
+Pipeline: yt-dlp downloads the videos (video only, highest available resolution) -> frames are sampled every
 --interval seconds (near-identical frames skipped) -> OWLv2 (open-vocabulary detector) finds
 characters -> CLIP embeds each crop -> the new crops are clustered (one cluster ~ one
 character) -> each cluster goes to the existing folder it looks very similar to, else to a
@@ -54,8 +54,8 @@ def download(url, max_videos, max_duration, video_dir):
             return f"skip, longer than {max_duration}s (compilation?)"
 
     opts = {
-        # video only (no ffmpeg needed for merging), H.264 so PyAV decodes it everywhere
-        "format": "bv*[height<=720][vcodec^=avc1]/bv*[height<=720]/b[height<=720]",
+        # video only (no ffmpeg needed for merging), highest resolution, H.264 preferred so PyAV decodes it everywhere
+        "format": "bv*[vcodec^=avc1]/bv*/b",
         "outtmpl": str(video_dir / "%(id)s.%(ext)s"),
         "match_filter": too_long,
         "playlistend": max_videos,

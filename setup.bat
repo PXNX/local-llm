@@ -6,11 +6,15 @@ cd /d "%~dp0"
 set "COMFY_VER=v0.37.0"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
-echo === Ollama + OpenCode + Deno (winget)
+echo === Ollama + Bun + Deno (winget)
 winget list --id Ollama.Ollama -e >nul 2>&1 || winget install --id Ollama.Ollama -e --silent --accept-package-agreements --accept-source-agreements
-winget list --id SST.opencode -e >nul 2>&1 || winget install --id SST.opencode -e --silent --accept-package-agreements --accept-source-agreements
+rem Bun: installs and self-updates OpenCode (npm package opencode-ai), winget's own SST.opencode package lags behind upstream
+winget list --id Oven-sh.Bun -e >nul 2>&1 || winget install --id Oven-sh.Bun -e --silent --accept-package-agreements --accept-source-agreements
 rem Deno: JavaScript runtime yt-dlp needs for YouTube (6-characters.bat)
 winget list --id DenoLand.Deno -e >nul 2>&1 || winget install --id DenoLand.Deno -e --silent --accept-package-agreements --accept-source-agreements
+
+echo === OpenCode (bun global install, self-updating)
+"%USERPROFILE%\.bun\bin\bun.exe" install -g opencode-ai
 
 rem Large context with little VRAM (applies after Ollama restarts)
 setx OLLAMA_CONTEXT_LENGTH 32768 >nul
@@ -37,7 +41,7 @@ echo === ComfyUI-GGUF node + sticker/vectorize/character/top-video dependencies
 if not exist "ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF" (
   git clone --depth 1 https://github.com/city96/ComfyUI-GGUF ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF
 )
-"%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]" vtracer yt-dlp scikit-learn telethon qrcode imageio-ffmpeg
+"%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]" vtracer yt-dlp scikit-learn telethon qrcode imageio-ffmpeg resvg-py
 
 echo.
 echo Done. Next steps:

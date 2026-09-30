@@ -28,7 +28,7 @@ powershell -NoProfile -Command "Invoke-RestMethod http://127.0.0.1:11434/api/gen
 "%OLLAMA%\ollama.exe" ps
 
 if /i "%~2"=="cli" (
-  "%LOCALAPPDATA%\Microsoft\WinGet\Packages\SST.opencode_Microsoft.Winget.Source_8wekyb3d8bbwe\opencode.exe" -m ollama/%MODEL%
+  "%USERPROFILE%\.bun\bin\opencode.exe" -m ollama/%MODEL%
   exit /b 0
 )
 

@@ -20,7 +20,6 @@ Usage (via 9-top5-videos.bat, which uses ComfyUI's embedded Python):
   9-top5-videos.bat [--topic funny|cute|auto] [--subject animals] [--hours 24] [options]
 """
 import argparse
-import base64
 import datetime as dt
 import io
 import json
@@ -29,8 +28,6 @@ import re
 import shutil
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 import av
@@ -42,8 +39,10 @@ ENV_FILE = HERE.parent / ".env"
 OUT_DIR = HERE / "out"
 DL_DIR = HERE / "downloads"
 CACHE = HERE / "scores.json"
-OLLAMA_URL = "http://127.0.0.1:11434"
-VISION_MODEL = "qwen3-vl:4b"
+sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE))  # embedded Python doesn't add the script folder (soundtrack.py)
+from common import llm  # noqa: E402
+
 FONTS = Path("C:/Windows/Fonts")
 FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 FPS = 30
@@ -52,13 +51,6 @@ TOPIC_WORDS = {"funny": "Funniest", "cute": "Cutest"}
 
 
 # ---------------------------------------------------------------- helpers
-def http_json(url, payload=None, timeout=600):
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
-
-
 def read_channels(path):
     chans = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -66,21 +58,6 @@ def read_channels(path):
         if line:
             chans.append(line)
     return chans
-
-
-def load_env(path):
-    """KEY=value lines from the repo's .env (# comments, optional quotes); real env vars win."""
-    import os
-
-    env = {}
-    if path.exists():
-        for line in path.read_text(encoding="utf-8-sig").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                env[k.strip()] = v.strip().strip("'\"")
-    env.update({k: v for k, v in os.environ.items() if k.startswith("TELEGRAM_")})
-    return env
 
 
 def load_cache():
@@ -205,6 +182,7 @@ async def collect(client, channels, since, args):
             print(f"[chan ] {ref}: cannot open ({e}) - are you subscribed to it?")
             continue
         name = getattr(ent, "title", None) or getattr(ent, "username", ref)
+        username = getattr(ent, "username", None)
         vids, all_views = [], []
         async for msg in client.iter_messages(ent, limit=args.scan_limit):
             if msg.date < since:
@@ -226,6 +204,8 @@ async def collect(client, channels, since, args):
             views, reacts, fwd = engagement(msg)
             found.append({
                 "key": f"{ent.id}_{msg.id}", "channel": name, "chan_id": ent.id, "msg_id": msg.id,
+                # public channels: t.me/<name>/<id> opens for everyone; t.me/c/... only for members
+                "link": f"https://t.me/{username}/{msg.id}" if username else f"https://t.me/c/{ent.id}/{msg.id}",
                 "date": msg.date.isoformat(), "duration": float(dur), "text": (msg.message or "")[:400],
                 "views": views, "reactions": reacts, "forwards": fwd,
                 "eng": views / base + 20 * reacts / base + 10 * fwd / base,
@@ -279,18 +259,7 @@ def score(grid, caption, subject, lang):
         '"subject": "<2-4 English words, e.g. \\"cat vs cucumber\\">", '
         f'"title": "<catchy title in {lang}, max 6 words, no hashtags, no emojis>"}}'
     )
-    payload = {
-        "model": VISION_MODEL,
-        "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(buf.getvalue()).decode()]}],
-        "format": "json", "stream": False, "think": False, "keep_alive": "5m",
-        "options": {"temperature": 0.2},
-    }
-    try:
-        res = http_json(f"{OLLAMA_URL}/api/chat", payload)
-    except urllib.error.HTTPError:
-        payload.pop("think")  # model without thinking support
-        res = http_json(f"{OLLAMA_URL}/api/chat", payload)
-    d = json.loads(res["message"]["content"])
+    d = llm.vision_json(prompt, buf.getvalue(), temperature=0.2, keep_alive="5m")
     num = lambda k: max(0.0, min(10.0, float(d.get(k, 0) or 0)))
     return {
         "funny": num("funny"), "cute": num("cute"),
@@ -421,8 +390,18 @@ def fancy_text(text, f, top="#FFFFFF", bottom="#FFD400", stroke=8, shadow=10):
     return out
 
 
-def emoji(char, size):
-    """Colour emoji (Segoe UI Emoji) as RGBA, or None if the font can't draw it."""
+TOPIC_EMOJI = {"funny": ("face-with-tears-of-joy", "rolling-on-the-floor-laughing"),
+               "cute": ("smiling-cat-with-heart-eyes", "smiling-face-with-hearts")}
+RANK_EMOJI = {1: "1st-place-medal", 2: "2nd-place-medal", 3: "3rd-place-medal"}
+
+
+def emoji(name, size, char=None):
+    """Fluent Emoji `name` as RGBA; falls back to the Segoe UI Emoji glyph `char` when offline."""
+    from fluent_emoji import emoji as fluent
+
+    im = fluent(name, size)
+    if im is not None or char is None:
+        return im
     try:
         f = ImageFont.truetype(str(FONTS / "seguiemj.ttf"), 109)
         im = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
@@ -525,7 +504,7 @@ def fit_width(im, max_w):
     return im.resize((int(max_w), int(im.height * max_w / im.width)), Image.LANCZOS) if im.width > max_w else im
 
 
-def card_frames(folder, W, H, rank, title, color, still, headline, seconds):
+def card_frames(folder, W, H, rank, title, color, still, headline, seconds, topic="funny"):
     """Animated rank card as a PNG sequence: rotating sunburst, #N pops in, the clip's still as a tilted
     polaroid, title pill slides up, the headline as a ribbon at the top (same on every card -> loops)."""
     folder.mkdir(exist_ok=True)
@@ -544,6 +523,8 @@ def card_frames(folder, W, H, rank, title, color, still, headline, seconds):
                          outline=color, width=max(3, unit // 150))
     centered(pd, lines, f_t, int(unit * 0.025), pill.width, "white", stroke=0)
     rib = fit_width(ribbon(headline.upper(), font(int(unit * 0.07))), W * 0.94) if headline else None
+    # medal for the podium, the topic's emoji for the other places; pops in after the number
+    emo = emoji(RANK_EMOJI.get(rank) or TOPIC_EMOJI.get(topic, TOPIC_EMOJI["funny"])[rank % 2], int(unit * 0.16))
     if vertical:
         num_c, pol_c, pill_c = (W / 2, H * 0.25), (W / 2, H * 0.58), (W / 2, H * 0.86)
     else:
@@ -557,6 +538,10 @@ def card_frames(folder, W, H, rank, title, color, still, headline, seconds):
         k = ease_back(t / 0.35)
         pulse = 1 + 0.03 * math.sin(max(0.0, t - 0.35) * 8)
         paste_center(fr, num, *num_c, scale=max(0.05, (0.2 + 0.8 * k) * pulse), angle=6 * (1 - min(1, t / 0.35)))
+        if emo is not None and t > 0.2:
+            ke = ease_back((t - 0.2) / 0.35)
+            paste_center(fr, emo, num_c[0] + unit * 0.22, num_c[1] - unit * 0.10, scale=max(0.05, ke),
+                         angle=12 * math.sin(t * 3))
         a = min(1.0, max(0.0, (t - 0.15) / 0.25))
         if a > 0:
             paste_center(fr, pill, pill_c[0], pill_c[1] + (1 - a) * unit * 0.08, alpha=a)
@@ -624,14 +609,19 @@ def thumbnail(path, W, H, top, word, topic):
     paste_center(im, t1, W / 2, H * (0.10 if v else 0.14), angle=-3)
     paste_center(im, t2, W / 2, H * (0.21 if v else 0.31), angle=-3)
     paste_center(im, ribbon("VIDEOS OF TODAY", font(int(unit * 0.075)), angle=2), W / 2, H * 0.88)
-    e = emoji("\U0001F602" if topic == "funny" else "\U0001F63B", int(unit * 0.22))
-    if e is not None:
-        paste_center(im, e, W * 0.14, H * (0.80 if v else 0.80), angle=12)
-        paste_center(im, e, W * 0.86, H * (0.80 if v else 0.80), angle=-12)
+    left, right = TOPIC_EMOJI.get(topic, TOPIC_EMOJI["funny"])
+    for name, char, x, a in ((left, "\U0001F602", 0.14, 12), (right, "\U0001F63B", 0.86, -12)):
+        e = emoji(name, int(unit * 0.22), char)
+        if e is not None:
+            paste_center(im, e, W * x, H * 0.80, angle=a)
+    trophy = emoji("trophy", int(unit * 0.12))
+    if trophy is not None and by_rank.get(1, {}).get("still") is not None:
+        paste_center(im, trophy, W * (0.22 if v else 0.30), H * (0.43 if v else 0.30), angle=10)
     im.convert("RGB").save(path, quality=92)
 
 
 SUB_SECONDS = 3.6
+SUB_CLICK = 1.7  # when the cursor clicks SUBSCRIBE (seconds into the prompt)
 
 
 def subscribe_frames(folder, W, H, text="Please subscribe for more!"):
@@ -641,7 +631,7 @@ def subscribe_frames(folder, W, H, text="Please subscribe for more!"):
     unit = min(W, H)
     f_txt, lines = fit_lines(ImageDraw.Draw(Image.new("RGB", (1, 1))), text, "impact.ttf", W * 0.84, int(unit * 0.10))
     f_btn = font(int(unit * 0.065), "ariblk.ttf")
-    click = 1.7
+    click = SUB_CLICK
 
     def panel(subscribed, press, bell_angle):
         pw, ph = int(W * 0.9), int(len(lines) * f_txt.size * 1.12 + unit * 0.24)
@@ -776,19 +766,34 @@ def render_clip(src, overlay_png, start, length, has_audio, W, H, out, args, ext
             *venc(args), *AENC, "-r", str(FPS), "-t", f"{length}", str(out)])
 
 
-def concat(parts, out, cover=None):
+def concat(parts, out):
     lst = out.with_suffix(".txt")
     lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts), encoding="utf-8")
-    cov = ["-i", str(cover), "-map", "0", "-map", "1", "-disposition:v:1", "attached_pic"] if cover else []
-    ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), *cov, "-c", "copy", "-movflags", "+faststart", str(out)])
+    ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)])
     lst.unlink()
 
 
-# ---------------------------------------------------------------- main
+def mux(video, out, cover=None, audio=None):
+    """Final MP4: video copied, sound replaced by `audio` (WAV, loudness-normalized) if given,
+    cover embedded as the thumbnail."""
+    ins, maps = ["-i", str(video)], ["-map", "0:v:0"]
+    if audio:
+        ins += ["-i", str(audio)]
+        maps += ["-map", "1:a:0"]
+        acodec = [*AENC, "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-shortest"]
+    else:
+        maps += ["-map", "0:a:0"]
+        acodec = ["-c:a", "copy"]
+    if cover:
+        maps += ["-map", f"{len(ins) // 2}:v:0", "-disposition:v:1", "attached_pic"]
+        ins += ["-i", str(cover)]
+    ffmpeg([*ins, *maps, "-c:v", "copy", *acodec, "-movflags", "+faststart", str(out)])
+
+
 async def run(args):
     from telethon import TelegramClient
 
-    env = load_env(ENV_FILE)
+    env = llm.load_env(ENV_FILE)
     if not env.get("TELEGRAM_API_ID") or not env.get("TELEGRAM_API_HASH"):
         sys.exit(f"Missing TELEGRAM_API_ID / TELEGRAM_API_HASH in {ENV_FILE}. Copy .env.example to .env and fill "
                  "them in from https://my.telegram.org (API development tools).")
@@ -833,19 +838,19 @@ async def run(args):
             print(f"[info ] --cached-only: {len(cands)} clip(s) already downloaded and rated")
         cands = cands[:args.max_candidates]
         print(f"[dl   ] downloading {len(cands)} candidate(s) ...")
-        for c in cands:
+        for i, c in enumerate(cands, 1):
             path = DL_DIR / f"{c['key']}.mp4"
+            print(f"[dl   ] {i}/{len(cands)} {c['channel'][:20]:20} {c['link']}")
             if not path.exists() or path.stat().st_size == 0:
                 tmp = path.with_suffix(".part")
                 await client.download_media(c["_msg"], file=str(tmp))
                 tmp.replace(path)
             c["path"] = path
 
-    # Ollama for scoring
-    try:
-        urllib.request.urlopen(OLLAMA_URL, timeout=3)
-    except Exception:
-        sys.exit("Ollama is not running (needed to rate the clips).")
+    if not llm.available():
+        sys.exit("Vision LLM not available (needed to rate the clips): set OPENROUTER_API_KEY in .env "
+                 "or start Ollama with LLM_PROVIDER=ollama.")
+    print(f"[rate ] rating with {llm.label()}")
     for i, c in enumerate(cands, 1):
         try:
             c["file_dur"], c["has_audio"] = probe(c["path"])
@@ -856,28 +861,42 @@ async def run(args):
             c["ai"] = cache[ck]
             a = c["ai"]
             print(f"[rate ] {i}/{len(cands)} {c['channel'][:20]:20} funny {a['funny']:4.1f} cute {a['cute']:4.1f} "
-                  f"{'' if a['entertainment'] else '(not fun) '}{a['subject']}")
+                  f"{'' if a['entertainment'] else '(not fun) '}{a['subject']}  {c['link']}")
         except Exception as e:
             print(f"[rate ] {c['key']}: skipped ({e})")
-    # unload the VLM so the GPU is free for encoding
-    try:
-        http_json(f"{OLLAMA_URL}/api/generate", {"model": VISION_MODEL, "keep_alive": 0}, timeout=30)
-    except Exception:
-        pass
+    llm.unload()  # frees the GPU for encoding
 
-    topic, top = pick(cands, args.topic, args.subject, args.count)
-    if len(top) < 2:
-        sys.exit(f"Only {len(top)} usable clip(s) - not enough for a ranking. Try --hours 48 or more channels.")
+    pool = [c for c in cands if c.get("ai")]
+    made = []
+    for v in range(1, args.batch + 1):
+        topic, top = pick(pool, args.topic, args.subject, args.count)
+        if len(top) < 2:
+            if not made:
+                sys.exit(f"Only {len(top)} usable clip(s) - not enough for a ranking. "
+                         "Try --hours 48 or more channels.")
+            print(f"[batch] only {len(top)} usable clip(s) left, stopping after {len(made)} video(s)")
+            break
+        if args.batch > 1:
+            print(f"[batch] video {v}/{args.batch}")
+        made.append(render_video(top, topic, args, now, W, H, suffix=f"_{v}" if v > 1 else ""))
+        used = {c["key"] for c in top}
+        pool = [c for c in pool if c["key"] not in used]  # every clip is used in one video only
+    if len(made) > 1:
+        print(f"[done ] {len(made)} videos:")
+        for p in made:
+            print(f"        {p}")
+
+
+def render_video(top, topic, args, now, W, H, suffix=""):
     word = TOPIC_WORDS[topic]
     print(f"[pick ] topic: {topic}")
     n = len(top)
     for rank, c in enumerate(top, 1):
         c["rank"] = rank
-        print(f"   #{rank}  {c['final']:5.2f}  {c['ai']['title'] or c['ai']['subject']}  ({c['channel']}, msg {c['msg_id']})")
+        print(f"   #{rank}  {c['final']:5.2f}  {c['ai']['title'] or c['ai']['subject']}  ({c['channel']}) {c['link']}")
 
-    # ---- render
     stamp = f"{now:%Y-%m-%d}"
-    work = OUT_DIR / f"_work_{topic}_{stamp}"
+    work = OUT_DIR / f"_work_{topic}_{stamp}{suffix}"
     work.mkdir(exist_ok=True)
     headline = args.headline or f"Top {n} {word} Videos of Today"
     order = sorted(top, key=lambda c: -c["rank"])  # countdown: #5 first
@@ -891,11 +910,15 @@ async def run(args):
         spans.append((c, t))
         t += c["len"]
     sub = {}
+    events = [(0.0, "whoosh")] if args.intro else []
+    for c, s0 in spans:  # whoosh + pop as each rank card flies in
+        events += [(s0 - args.card_seconds, "whoosh"), (s0 - args.card_seconds + 0.12, "pop")]
     if not args.no_subscribe:
         for c, s0 in sorted(spans, key=lambda x: abs(x[1] + x[0]["len"] / 2 - t / 2)):
             if c["len"] >= SUB_SECONDS + 0.6:
                 at = min(max(t / 2 - s0, 0.3), c["len"] - SUB_SECONDS - 0.3)
                 sub[c["rank"]] = (subscribe_frames(work / "subscribe", W, H, args.subscribe_text), at)
+                events.append((s0 + at + SUB_CLICK, "click"))
                 print(f"[video] subscribe prompt at {s0 + at:.1f}s of {t:.1f}s (in #{c['rank']})")
                 break
 
@@ -911,24 +934,36 @@ async def run(args):
         title = c["ai"]["title"] or c["ai"]["subject"]
         c["still"] = still_at(c["path"], c["len"] * 0.4)
         card_src = card_frames(work / f"card_{r}", W, H, r, title, RANK_COLORS[r], c["still"],
-                               None if args.intro else headline, args.card_seconds)
+                               None if args.intro else headline, args.card_seconds, topic)
         badge(work / f"badge_{r}.png", W, H, r, title if args.title_bar else "", None if args.intro else headline)
         print(f"[video] #{r}: {c['len']:.1f}s")
         render_card(card_src, args.card_seconds, work / f"{10 - r:02d}a_card.mp4", args)
-        render_clip(c["path"], work / f"badge_{r}.png", 0.0, c["len"], c["has_audio"], W, H,
-                    work / f"{10 - r:02d}b_clip.mp4", args, extra=sub.get(r))
+        # the clips' own sound (often copyrighted music) is only kept with --audio original
+        render_clip(c["path"], work / f"badge_{r}.png", 0.0, c["len"], c["has_audio"] and args.audio == "original",
+                    W, H, work / f"{10 - r:02d}b_clip.mp4", args, extra=sub.get(r))
         parts += [work / f"{10 - r:02d}a_card.mp4", work / f"{10 - r:02d}b_clip.mp4"]
 
-    out = OUT_DIR / f"top{n}_{topic}_{stamp}.mp4"
+    out = OUT_DIR / f"top{n}_{topic}_{stamp}{suffix}.mp4"
     thumb = out.with_name(out.stem + "_thumbnail.jpg")
     thumbnail(thumb, W, H, top, word, topic)
-    concat(parts, out, thumb)
-    credits = [f"#{c['rank']}: {c['channel']} (t.me/c/{c['chan_id']}/{c['msg_id']})" for c in top]
+    joined = work / "joined.mp4"
+    concat(parts, joined)
+    music = None
+    if args.audio == "music":
+        import soundtrack
+
+        total = probe(joined)[0]
+        seed = int(f"{now:%Y%m%d}") * 100 + int(suffix[1:] or 1) * 2 + (topic == "cute")  # new tune per video
+        music = soundtrack.soundtrack(work / "music.wav", total, events, topic, seed)
+        print(f"[audio] own soundtrack ({total:.1f}s, loops with the video)")
+    mux(joined, out, thumb, music)
+    credits = [f"#{c['rank']}: {c['channel']} ({c['link']})" for c in top]
     out.with_suffix(".txt").write_text(f"{headline} - {stamp}\n\n" + "\n".join(credits) + "\n", encoding="utf-8")
     if not args.keep_work:
         shutil.rmtree(work)
     print(f"[done ] {out}")
     print(f"        thumbnail: {thumb.name}, sources/credits: {out.with_suffix('.txt').name}")
+    return out
 
 
 def main():
@@ -956,6 +991,11 @@ def main():
     ap.add_argument("--lang", default="English", help="language of the titles (default English)")
     ap.add_argument("--headline", help='own intro text, default "Top 5 Funniest/Cutest Videos of Today"')
     ap.add_argument("--title-bar", action="store_true", help="also show the title as a bar on the clips")
+    ap.add_argument("--audio", choices=["music", "original", "none"], default="music",
+                    help="music = own generated soundtrack, copyright-free (default); original = the clips' "
+                         "own sound (may contain copyrighted music); none = silent")
+    ap.add_argument("--batch", type=int, default=1,
+                    help="make up to N videos in one run, each with different clips (default 1)")
     ap.add_argument("--no-subscribe", action="store_true", help="no subscribe prompt in the middle")
     ap.add_argument("--subscribe-text", default="Please subscribe for more!")
     ap.add_argument("--nvenc", action="store_true", help="encode on the GPU (needs NVIDIA driver >= 570)")

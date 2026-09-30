@@ -8,13 +8,14 @@ Pipeline per clip:
 
 Usage (via 10-image-to-video.bat, which uses ComfyUI's embedded Python):
   10-image-to-video.bat photo.jpg [--prompt "the dog wags its tail, camera slowly zooms in"]
-                                  [--seconds 3] [--size 832] [--steps 20] [--count 2] [--seed 42]
+                                  [--seconds 3] [--res 720p] [--steps 20] [--count 2] [--seed 42]
+  --res 480p/720p is generated natively; 1080p/1440p/4k is generated at 720p (Wan 2.2 5B's maximum,
+  anything bigger does not fit into VRAM) and then upscaled with ffmpeg (lanczos).
 Needs models/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors, models/vae/wan2.2_vae.safetensors
 and models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors (0-download-all.bat).
 Result: img2video/out/<image>_<seed>.mp4
 """
 import argparse
-import base64
 import io
 import json
 import random
@@ -30,8 +31,9 @@ from PIL import Image, ImageOps
 HERE = Path(__file__).resolve().parent
 COMFY_DIR = HERE.parent / "ComfyUI_windows_portable" / "ComfyUI"
 COMFY_URL = "http://127.0.0.1:8188"
-OLLAMA_URL = "http://127.0.0.1:11434"
-VISION_MODEL = "qwen3-vl:4b"
+sys.path.insert(0, str(HERE.parent))
+from common import llm  # noqa: E402
+
 FPS = 24
 FALLBACK_MOTION = "natural subtle motion, the subject moves slightly and breathes, gentle slow camera push-in"
 QUALITY = "smooth natural motion, consistent lighting, high quality, detailed"
@@ -57,6 +59,28 @@ def slug(text):
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_") or "video"
 
 
+RESOLUTIONS = {"480p": 480, "720p": 720, "1080p": 1080, "1440p": 1440, "4k": 2160}
+NATIVE_MAX = 720
+
+
+def short_side_size(img, short_side):
+    """Keep the image's aspect ratio, short side ~short_side, both sides multiples of 32 (Wan 2.2 VAE)."""
+    scale = short_side / min(img.width, img.height)
+    return (max(32, round(img.width * scale / 32) * 32), max(32, round(img.height * scale / 32) * 32))
+
+
+def upscale(src, dst, factor):
+    """Lanczos upscale of the finished clip on the CPU (the GPU is idle again by then)."""
+    import subprocess
+
+    import imageio_ffmpeg
+
+    cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-i", str(src),
+           "-vf", f"scale=trunc(iw*{factor}/2)*2:trunc(ih*{factor}/2)*2:flags=lanczos",
+           "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(dst)]
+    subprocess.run(cmd, check=True)
+
+
 def video_size(img, long_side):
     """Keep the image's aspect ratio, long side ~long_side, both sides multiples of 32 (Wan 2.2 VAE)."""
     scale = long_side / max(img.width, img.height)
@@ -72,21 +96,7 @@ def describe_motion(img, count):
               "first what the scene shows, then what moves (people, animals, objects, water, hair, clouds ...) "
               "and one simple camera move (slow zoom in, pan left, static, orbit ...). Keep it plausible, "
               "no scene cuts, no new characters. Reply with JSON only: {\"prompts\": [\"...\"]}")
-    payload = {
-        "model": VISION_MODEL,
-        "messages": [{"role": "user", "content": prompt, "images": [base64.b64encode(buf.getvalue()).decode()]}],
-        "format": "json",
-        "stream": False,
-        "think": False,
-        "keep_alive": 0,  # free the VRAM right away for ComfyUI
-        "options": {"temperature": 0.7},
-    }
-    try:
-        res = http_json(f"{OLLAMA_URL}/api/chat", payload)
-    except urllib.error.HTTPError:
-        payload.pop("think")  # model without thinking support
-        res = http_json(f"{OLLAMA_URL}/api/chat", payload)
-    prompts = json.loads(res["message"]["content"]).get("prompts", [])
+    prompts = llm.vision_json(prompt, buf.getvalue(), temperature=0.7).get("prompts", [])
     return [str(p).strip() for p in prompts if str(p).strip()]
 
 
@@ -127,6 +137,8 @@ def main():
     ap.add_argument("--count", type=int, default=1, help="number of clips, each with its own prompt and seed (default 1)")
     ap.add_argument("--seconds", type=float, default=3.0, help=f"clip length in seconds at {FPS} fps (default 3, max ~5 on 6 GB VRAM)")
     ap.add_argument("--size", type=int, default=832, help="long side in pixels, aspect ratio follows the image (default 832; 640 is faster)")
+    ap.add_argument("--res", choices=list(RESOLUTIONS),
+                    help="output resolution (short side), overrides --size; above 720p the clip is upscaled from 720p")
     ap.add_argument("--steps", type=int, default=20, help="sampling steps (default 20; 12-15 is faster but blurrier)")
     ap.add_argument("--cfg", type=float, default=5.0, help="prompt strength (default 5)")
     ap.add_argument("--seed", type=int, default=None)
@@ -141,8 +153,8 @@ def main():
     img = ImageOps.exif_transpose(Image.open(args.image)).convert("RGB")
     count = max(args.count, len(args.prompt))
     prompts = list(args.prompt)
-    if len(prompts) < count and reachable(OLLAMA_URL):
-        print(f"[motion ] asking {VISION_MODEL} ...")
+    if len(prompts) < count and llm.available():
+        print(f"[motion ] asking {llm.label()} ...")
         try:
             prompts += describe_motion(img, count - len(prompts))
         except Exception as e:
@@ -150,7 +162,9 @@ def main():
     prompts = (prompts or [FALLBACK_MOTION])
     prompts = (prompts * count)[:count]
 
-    size = video_size(img, args.size)
+    target = RESOLUTIONS.get(args.res)
+    size = short_side_size(img, min(target, NATIVE_MAX)) if target else video_size(img, args.size)
+    factor = target / NATIVE_MAX if target and target > NATIVE_MAX else None
     frames = max(1, round(args.seconds * FPS / 4)) * 4 + 1  # Wan needs 4n+1 frames
     seed = args.seed if args.seed is not None else random.randint(0, 2**31)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -159,7 +173,15 @@ def main():
         print(f"[animate] clip {i + 1}/{count}: {size[0]}x{size[1]}, {frames} frames, seed {s}")
         print(f"[prompt ] {prompt}")
         mp4 = args.out / f"{slug(args.image.stem)}_{s}.mp4"
-        mp4.write_bytes(animate(img, prompt, s, size, frames, args.steps, args.cfg))
+        clip = animate(img, prompt, s, size, frames, args.steps, args.cfg)
+        if factor:
+            raw = mp4.with_name(mp4.stem + "_720p.mp4")
+            raw.write_bytes(clip)
+            print(f"[upscale] {args.res}: x{factor:g} (lanczos)")
+            upscale(raw, mp4, factor)
+            raw.unlink()
+        else:
+            mp4.write_bytes(clip)
         mp4.with_suffix(".txt").write_text(f"{prompt}\n", encoding="utf-8")
         print(f"[done   ] {mp4}")
 

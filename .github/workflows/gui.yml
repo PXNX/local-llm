@@ -1,0 +1,60 @@
+name: GUI
+
+# Builds gui/ (local-llm.exe) on every push/PR that touches it; a tag like v1.2.0 also publishes a release.
+# Nothing private is used or embedded: keys live in the user's local .env, read at runtime.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["gui/**", "models.json", ".github/workflows/gui.yml"]
+  pull_request:
+    paths: ["gui/**", "models.json", ".github/workflows/gui.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: gui
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gui
+
+      - name: Lint
+        run: cargo clippy --release --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/local-llm.exe dist/
+          Compress-Archive -Path dist/local-llm.exe -DestinationPath dist/local-llm-windows-x64.zip -Force
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: local-llm-windows-x64
+          path: gui/dist/local-llm.exe
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gui/dist/local-llm-windows-x64.zip
+          generate_release_notes: true
