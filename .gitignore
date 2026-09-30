@@ -4,6 +4,10 @@ ComfyUI_windows_portable/
 
 # Downloads / logs
 download-models.log
+
+# Kokoro TTS voice models, downloaded once by comedy/voice.py (~350 MB)
+comedy/models/
+comedy/cache/
 *.done
 
 # Sticker output
