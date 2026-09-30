@@ -62,6 +62,18 @@ def bell(midi, dur):
     return s * np.minimum(1, t * 800)
 
 
+def clarinet(midi, dur):
+    """Woodwind: hollow odd-harmonic tone (clarinet-like), soft attack, gentle vibrato."""
+    t = _t(dur)
+    f = _hz(midi)
+    vib = 1 + 0.006 * np.sin(2 * np.pi * 5 * t) * np.minimum(1, t / 0.3)
+    s = np.zeros_like(t)
+    for h, a in ((1, 1.0), (3, 0.55), (5, 0.30), (7, 0.15)):
+        s += a * np.sin(2 * np.pi * f * h * vib * t)
+    env = np.minimum(1, t / 0.05) * np.minimum(1, (dur - t) / 0.08)
+    return s * env * 0.55
+
+
 def bass(midi, dur):
     t = _t(dur)
     f = _hz(midi)
@@ -141,12 +153,23 @@ def chime(root_midi):
     return s * 0.5
 
 
+STYLES = {
+    "auto": "upbeat pluck (funny) or music-box bell (cute), full drums - the default",
+    "clarinet": "mellow woodwind melody over soft, sparse drums - wholesome, fits cute animal/cat clips",
+}
+
+
 # ---------------------------------------------------------------- composer
-def music(total, topic="funny", seed=0):
-    """Stereo backing track of exactly `total` seconds, a whole number of bars long."""
+def music(total, topic="funny", seed=0, style="auto"):
+    """Stereo backing track of exactly `total` seconds, a whole number of bars long.
+
+    style: "auto" (default) - pluck lead for "funny", music-box bell for "cute", full drums.
+    "clarinet" - gentle woodwind lead over soft, sparse percussion, regardless of topic.
+    """
     rng = random.Random(seed)
     nrng = np.random.default_rng(seed)
-    base_bpm = 124 if topic == "funny" else 100
+    gentle = style == "clarinet"
+    base_bpm = 96 if gentle else (124 if topic == "funny" else 100)
     bars = max(4, round(total / (240 / base_bpm)))
     bar = total / bars
     beat = bar / 4
@@ -159,14 +182,19 @@ def music(total, topic="funny", seed=0):
     tail = 2 * SR  # room for notes ringing past the end
     L, R = np.zeros(n + tail), np.zeros(n + tail)
     k, sn, cl = kick(), snare(nrng), clap(nrng)
-    lead = pluck if topic == "funny" else bell
+    lead = clarinet if gentle else (pluck if topic == "funny" else bell)
     for b in range(bars):
         t0 = b * bar
         deg = prog[b % len(prog)]
         ch = _chord(root, deg)
         section = (b // 8) % 2  # alternate a lighter and a fuller 8-bar section
-        # drums
+        # drums: the clarinet style keeps just a soft kick on beat 1, no snare/clap
         for q in range(4):
+            if gentle:
+                if q == 0:
+                    _add(L, k, t0, 0.3)
+                    _add(R, k, t0, 0.3)
+                continue
             if topic == "funny" or q in (0, 2):
                 _add(L, k, t0 + q * beat, 0.6)
                 _add(R, k, t0 + q * beat, 0.6)
@@ -174,17 +202,18 @@ def music(total, topic="funny", seed=0):
                 s = sn if topic == "funny" else cl
                 _add(L, s, t0 + q * beat, 0.22)
                 _add(R, s, t0 + q * beat, 0.22)
+        hat_scale = 0.4 if gentle else 1.0
         for e in range(8):
             h = hat(nrng, open_=(e % 4 == 3 and section == 1))
-            _add(L, h, t0 + e * beat / 2, 0.9 if e % 2 else 0.5)
-            _add(R, h, t0 + e * beat / 2, 0.5 if e % 2 else 0.9)
+            _add(L, h, t0 + e * beat / 2, (0.9 if e % 2 else 0.5) * hat_scale)
+            _add(R, h, t0 + e * beat / 2, (0.5 if e % 2 else 0.9) * hat_scale)
         # bass: root on 1 and 3, bouncy octave on the offbeats in the funny style
         for q, off, o in ((0, 0, 0), (2, 0, 0), (1, 0.5, 12), (3, 0.5, 12)):
-            if o and topic != "funny":
+            if o and (topic != "funny" or gentle):
                 continue
             bs = bass(ch[0] - 12, beat * (0.9 if not o else 0.4))
-            _add(L, bs, t0 + (q + off) * beat, 0.55)
-            _add(R, bs, t0 + (q + off) * beat, 0.55)
+            _add(L, bs, t0 + (q + off) * beat, 0.55 * (0.7 if gentle else 1.0))
+            _add(R, bs, t0 + (q + off) * beat, 0.55 * (0.7 if gentle else 1.0))
         # pad, ducked by the kick
         p = pad([m + 12 for m in ch], bar)
         duck = 1 - 0.55 * np.exp(-((np.arange(p.size) / SR) % beat) * 12)
@@ -206,9 +235,9 @@ def music(total, topic="funny", seed=0):
     return np.stack([L[:n], R[:n]]), root
 
 
-def soundtrack(path, total, events, topic="funny", seed=0):
+def soundtrack(path, total, events, topic="funny", seed=0, style="auto"):
     """events: list of (seconds, kind) with kind in whoosh/pop/click. Writes a 16-bit stereo WAV."""
-    mix, root = music(total, topic, seed)
+    mix, root = music(total, topic, seed, style)
     rng = np.random.default_rng(seed + 1)
     for at, kind in events:
         if kind == "whoosh":

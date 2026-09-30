@@ -1017,8 +1017,8 @@ def render_video(top, topic, args, now, W, H, suffix=""):
 
         total = probe(joined)[0]
         seed = int(f"{now:%Y%m%d}") * 100 + int(suffix[1:] or 1) * 2 + (topic == "cute")  # new tune per video
-        music = soundtrack.soundtrack(work / "music.wav", total, events, topic, seed)
-        print(f"[audio] own soundtrack ({total:.1f}s, loops with the video)")
+        music = soundtrack.soundtrack(work / "music.wav", total, events, topic, seed, args.music_style)
+        print(f"[audio] own soundtrack, {args.music_style} style ({total:.1f}s, loops with the video)")
     mux(joined, out, thumb, music)
     credits = [f"#{c['rank']}: {c['channel']} ({c['link']})" for c in top]
     out.with_suffix(".txt").write_text(f"{headline} - {stamp}\n\n" + "\n".join(credits) + "\n", encoding="utf-8")
@@ -1061,6 +1061,9 @@ def main():
     ap.add_argument("--audio", choices=["music", "original", "none"], default="music",
                     help="music = own generated soundtrack, copyright-free (default); original = the clips' "
                          "own sound (may contain copyrighted music); none = silent")
+    ap.add_argument("--music-style", choices=["auto", "clarinet"], default="auto",
+                    help="only with --audio music: auto = upbeat pluck/music-box (default); "
+                         "clarinet = mellow woodwind melody over soft drums, wholesome, fits cute cat/animal clips")
     ap.add_argument("--batch", type=int, default=1,
                     help="make up to N videos in one run, each with different clips (default 1)")
     ap.add_argument("--no-subscribe", action="store_true", help="no subscribe prompt in the middle")
