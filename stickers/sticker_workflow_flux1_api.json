@@ -1,52 +1,90 @@
 {
   "1": {
     "class_type": "UnetLoaderGGUF",
-    "inputs": { "unet_name": "flux1-schnell-Q4_K_S.gguf" }
+    "inputs": {
+      "unet_name": "flux1-schnell-Q4_K_S.gguf"
+    }
   },
   "2": {
     "class_type": "DualCLIPLoaderGGUF",
-    "inputs": { "clip_name1": "clip_l.safetensors", "clip_name2": "t5-v1_1-xxl-encoder-Q5_K_M.gguf", "type": "flux" }
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5-v1_1-xxl-encoder-Q5_K_M.gguf",
+      "type": "flux"
+    }
   },
   "3": {
     "class_type": "VAELoader",
-    "inputs": { "vae_name": "ae.safetensors" }
-  },
-  "4": {
-    "class_type": "LoadImage",
-    "inputs": { "image": "sticker_input.png" }
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    }
   },
   "5": {
-    "class_type": "VAEEncode",
-    "inputs": { "pixels": ["4", 0], "vae": ["3", 0] }
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
   },
   "6": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "clip": ["2", 0],
-      "text": "chat sticker photo of SUBJECT, clearly acting out that emotion with an exaggerated, unmistakable facial expression and body language, vivid detailed fur/skin, warm studio lighting, vibrant colors, high quality, centered, plain white background"
+      "clip": [
+        "2",
+        0
+      ],
+      "text": "cute cartoon chat sticker. The character: SUBJECT. What it does: EXPRESSION - exaggerated and unmistakable, like a classic emoji sticker. Slightly cartoonish semi-realistic style, soft painterly digital art, big expressive eyes, detailed fluffy fur and hair, whole character centered, isolated on a plain flat pale blue background. No text, no letters, no words, no speech bubbles."
     }
   },
   "7": {
     "class_type": "KSampler",
     "inputs": {
-      "model": ["1", 0],
-      "positive": ["6", 0],
-      "negative": ["6", 0],
-      "latent_image": ["5", 0],
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "6",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ],
       "seed": 0,
       "steps": 4,
       "cfg": 1.0,
       "sampler_name": "euler",
       "scheduler": "simple",
-      "denoise": 0.55
+      "denoise": 1.0
     }
   },
   "9": {
     "class_type": "VAEDecode",
-    "inputs": { "samples": ["7", 0], "vae": ["3", 0] }
+    "inputs": {
+      "samples": [
+        "7",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
   },
   "8": {
     "class_type": "SaveImage",
-    "inputs": { "images": ["9", 0], "filename_prefix": "sticker/stylized" }
+    "inputs": {
+      "images": [
+        "9",
+        0
+      ],
+      "filename_prefix": "sticker/stylized"
+    }
   }
 }

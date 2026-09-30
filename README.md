@@ -30,25 +30,28 @@ The OpenCode config template is `config/opencode.json`.
 | `10-image-to-video.bat` | Image -> short animated MP4 clip (the image is the first frame). Drag & drop an image onto it or double-click and pick one. `qwen3-vl:4b` writes the motion prompt unless you give `--prompt`. Wan 2.2 TI2V 5B in ComfyUI (already downloaded), roughly 10-30 min per clip. Starts Ollama + ComfyUI automatically. Result: `img2video\out\` |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
-- `--count 5` number of stickers (each with a different reaction, pose and text style)
+- `--count 5` number of stickers (each with a different reaction and pose; one character look and text style per batch)
 - `--lang German` caption language
 - `--text "My text"` your own caption (repeatable, one per sticker), skips the LLM for text
 - `--no-text` no text on any sticker, just the stylized image acting out the reaction
 - `--engine flux1` stylize engine, see below, default `flux1`
-- `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55 (`flux1`/`sdxl`/`photomaker` only)
+- `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55 (`sdxl`/`photomaker` only)
 - `--no-stylize` no ComfyUI, only cut out the original (works without the driver update)
 
-Pipeline: `qwen3-vl:4b` (Ollama) picks a reaction per sticker - a pose/expression for the subject to
-act it out (e.g. "waving, big cheerful smile" for a greeting) plus a short text or none at all
-("Hi there!", "Nope", "Thank youuuu" ...) - then ComfyUI draws the subject acting out that reaction
-(`--engine`, below), then rembg removes the background, then a white outline plus the text (font,
-color and placement cycle through a few styles across the batch, see `TEXT_STYLES` in
-`stickers/make_stickers.py`), then 512x512 WebP < 100 KB (WhatsApp/Telegram).
+Pipeline: `qwen3-vl:4b` (Ollama) describes the look of the animal/person in the photo (breed, colors,
+markings, eyes ...) and picks a reaction per sticker - face plus body action to act it out (e.g.
+"waving one paw with a big open-mouthed smile" for a greeting, optionally with a doodle like hearts or
+zzz) plus a short text or none at all ("Hi there!", "Nope", "Thank youuuu" ...) - then ComfyUI draws
+that same character as a cartoonish semi-realistic sticker acting out the reaction (`--engine`, below;
+the photo only defines who to draw, not the composition), then rembg removes the background, then a
+white die-cut outline plus the text in rounded Fredoka (`stickers/fonts/`, OFL). All stickers of one
+input share the seed and one text style (`TEXT_STYLES` in `stickers/make_stickers.py`), so a batch
+reads as one sticker pack. Output: 512x512 WebP < 100 KB (WhatsApp/Telegram), one sticker per file.
 
 Stylize engines (`stickers/sticker_workflow_*_api.json`, can also be dragged into ComfyUI):
 | engine | needs | notes |
 | --- | --- | --- |
-| `flux1` (default) | `flux1-schnell-Q4_K_S.gguf` + `clip_l.safetensors` + `t5-v1_1-xxl-encoder-Q5_K_M.gguf` + `ae.safetensors` (all already downloaded) | FLUX.1 schnell img2img, GGUF-quantized, fits the RTX 2060's 6 GB VRAM - SDXL is broken on this ComfyUI build (see Known issue below), FLUX.1 works |
+| `flux1` (default) | `flux1-schnell-Q4_K_S.gguf` + `clip_l.safetensors` + `t5-v1_1-xxl-encoder-Q5_K_M.gguf` + `ae.safetensors` (all already downloaded) | FLUX.1 schnell text-to-image from the vision model's look description, GGUF-quantized, fits the RTX 2060's 6 GB VRAM - SDXL is broken on this ComfyUI build (see Known issue below), FLUX.1 works |
 | `sdxl` | `DreamShaperXL_Turbo_v2_1.safetensors` (already downloaded) | Fast SDXL img2img, but currently broken - flat gray output, see Known issue below |
 | `photomaker` | same checkpoint + `models/photomaker/photomaker-v2.bin` (`0-download-all.bat` grabs it) | SDXL + PhotoMaker face-identity conditioning - best resemblance for the VRAM it costs, once SDXL is fixed |
 | `qwen-image21` | `models/diffusion_models/qwen-image-2.1-UC-fp8.safetensors` (downloaded) + a Qwen3-VL-8B text encoder + the Qwen-Image 2.1 VAE (not downloaded yet, several more GB) | Native reference-image editing, best quality ceiling, but slow on 6 GB VRAM |

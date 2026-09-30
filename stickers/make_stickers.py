@@ -2,9 +2,10 @@
 
 Pipeline per sticker:
   1. Caption  - Ollama vision model picks a reaction, an expression/pose to draw and (optionally) a text
-  2. Stylize  - ComfyUI turns it into a cartoon sticker acting out that reaction (optional)
+  2. Stylize  - ComfyUI draws the same animal/person as a cartoonish sticker acting out that
+                reaction (optional); the photo only defines who to draw, not the composition
   3. Cut out  - rembg removes the background
-  4. Compose  - white die-cut outline + text in a style cycled per sticker (or no text at all),
+  4. Compose  - white die-cut outline + text, one style for the whole batch (or no text at all),
                 512x512 transparent WebP
 
 Usage (via 2-stickers.bat, which uses ComfyUI's embedded Python):
@@ -12,7 +13,7 @@ Usage (via 2-stickers.bat, which uses ComfyUI's embedded Python):
                            [--engine sdxl] [--strength 0.55] [--no-stylize] [--seed 42]
 
 Stylize engines (--engine):
-  flux1         FLUX.1 [schnell] img2img, GGUF-quantized (default). Needs
+  flux1         FLUX.1 [schnell] text-to-image from the vision model's look description (default). Needs
                 models/diffusion_models/flux1-schnell-Q4_K_S.gguf, models/text_encoders/clip_l.safetensors
                 and t5-v1_1-xxl-encoder-Q5_K_M.gguf, models/vae/ae.safetensors. SDXL is broken on this
                 ComfyUI build (gray-square bug, upstream issue), FLUX.1 works instead.
@@ -49,17 +50,18 @@ COMFY_URL = "http://127.0.0.1:8188"
 OLLAMA_URL = "http://127.0.0.1:11434"
 VISION_MODEL = "qwen3-vl:4b"
 FONTS = Path("C:/Windows/Fonts")
+FREDOKA = HERE / "fonts" / "Fredoka.ttf"  # OFL, rounded bold like classic chat stickers
 
 SIZE = 512          # sticker canvas (WhatsApp/Telegram spec)
 BORDER = 10         # white die-cut outline in px
 MAX_BYTES = 100_000  # WhatsApp limit for static stickers
 
-# Cycled per sticker so a batch doesn't look like the same meme template over and over.
+# One style per input image (picked by the seed), so a batch reads as one sticker pack.
 TEXT_STYLES = [
-    {"font": FONTS / "impact.ttf", "fill": "white", "stroke": "black", "placement": "bottom"},
-    {"font": FONTS / "comicbd.ttf", "fill": "#FFD400", "stroke": "black", "placement": "bottom"},
-    {"font": FONTS / "segoeprb.ttf", "fill": "white", "stroke": "#E8397A", "placement": "top"},
-    {"font": FONTS / "ariblk.ttf", "fill": "black", "stroke": None, "badge": "white", "placement": "bottom"},
+    {"font": FREDOKA, "fill": "#FFF3D6", "stroke": "#4A2A17", "placement": "bottom"},
+    {"font": FREDOKA, "fill": "white", "stroke": "#D6336C", "placement": "bottom"},
+    {"font": FREDOKA, "fill": "#FFD43B", "stroke": "#5C3A10", "placement": "bottom"},
+    {"font": FREDOKA, "fill": "white", "stroke": "#1C6FB8", "placement": "bottom"},
 ]
 
 ENGINES = {
@@ -88,19 +90,26 @@ def reachable(url):
 
 
 # ---------------------------------------------------------------- 1. caption
-def caption(img, count, lang):
+def caption(img, count, lang, texts=None):
     buf = io.BytesIO()
     img.convert("RGB").resize((min(img.width, 768), int(img.height * min(img.width, 768) / img.width))).save(buf, "JPEG", quality=90)
     prompt = (
         "Look at this image. Reply with JSON only, in this exact shape: "
-        '{"subject": "<short English description of the main subject for an image generator, max 15 words>", '
-        f'"stickers": [<{count} different reaction-sticker ideas, each '
+        '{"subject": "<English description of the main animal or person so an illustrator can draw the same '
+        'individual again: species/breed, fur or hair colors and markings, eye color, distinctive features '
+        '(beard, glasses, ...) - only the look, no pose, no facial expression or mood, no background, max 30 words>", '
+        + (f'"stickers": [<one entry per text, in this order: {json.dumps(texts, ensure_ascii=False)}, each '
+           if texts else f'"stickers": [<{count} different reaction-sticker ideas, each ') +
         '{"expression": "<a specific, exaggerated pose/face that unmistakably acts out that exact emotion for an '
-        'image generator - e.g. wide-mouthed mid-yawn for tired, one paw/hand covering the face for embarrassment, '
-        'running mid-stride for on my way, big pleading eyes for please, eyes closed turned away for annoyed - max 12 words>", '
-        f'"text": "<a short reaction-sticker text in {lang}, 1-3 words, like chat-sticker classics: '
-        '\\"Hi there!\\", \\"Yes!\\", \\"Nope\\", \\"Thank youuuu\\", \\"Wait, what?\\", \\"Please?\\", \\"Oh no!\\", \\"Kisses!\\" '
-        '- or an empty string if the pose already says it without text; no hashtags, no emojis>}>]}'
+        'image generator: always the face (eyes, mouth) AND what the body/paws/hands do - e.g. hugging a big red '
+        'heart with eyes closed and a blissful smile for love, waving one paw with a big open-mouthed smile for hi, wide-mouthed mid-yawn for tired, one paw/hand covering the face for embarrassment, '
+        'running mid-stride for on my way, big pleading eyes for please, eyes closed turned away for annoyed - '
+        'optionally plus one small doodle that underlines it (floating pink hearts, question marks, zzz, sparkles, '
+        'sweat drop, motion lines) - no words, no quotes, nothing written - max 20 words>", '
+        + ('"text": "<that text, unchanged>"}>]}' if texts else
+           f'"text": "<a short reaction-sticker text in {lang}, 1-3 words, like chat-sticker classics: '
+           '\\"Hi there!\\", \\"Yes!\\", \\"Nope\\", \\"Thank youuuu\\", \\"Wait, what?\\", \\"Please?\\", \\"Oh no!\\", \\"Kisses!\\" '
+           '- or an empty string if the pose already says it without text; no hashtags, no emojis>}>]}')
     )
     payload = {
         "model": VISION_MODEL,
@@ -109,7 +118,9 @@ def caption(img, count, lang):
         "stream": False,
         "think": False,
         "keep_alive": 0,  # free the VRAM right away for ComfyUI
-        "options": {"temperature": 0.9},
+        # Ollama defaults to a 32k context: its KV cache pushes half the model onto the CPU on 6 GB.
+        # qwen3-vl still thinks despite think=False, so leave room for thinking + answer.
+        "options": {"temperature": 0.9, "num_ctx": 6144, "num_predict": 3000},
     }
     try:
         res = http_json(f"{OLLAMA_URL}/api/chat", payload)
@@ -126,6 +137,7 @@ def caption(img, count, lang):
 
 # ---------------------------------------------------------------- 2. stylize
 def stylize(img, subject, expression, seed, strength, idx, engine):
+    look = subject
     if expression:
         subject = f"{subject}, {expression}"
     # Pre-scale to ~1 megapixel, multiples of 64 (fits SDXL and the DiT edit models alike)
@@ -136,10 +148,9 @@ def stylize(img, subject, expression, seed, strength, idx, engine):
 
     wf = json.loads((HERE / ENGINES[engine]).read_text())
     if engine == "flux1":
-        wf["4"]["inputs"]["image"] = name
-        wf["6"]["inputs"]["text"] = wf["6"]["inputs"]["text"].replace("SUBJECT", subject)
+        text = wf["6"]["inputs"]["text"].replace("SUBJECT", look)
+        wf["6"]["inputs"]["text"] = text.replace("EXPRESSION", expression or "smiling happily")
         wf["7"]["inputs"]["seed"] = seed
-        wf["7"]["inputs"]["denoise"] = strength
     elif engine == "sdxl":
         wf["2"]["inputs"]["image"] = name
         wf["4"]["inputs"]["text"] = wf["4"]["inputs"]["text"].replace("SUBJECT", subject)
@@ -188,24 +199,31 @@ def cut_out(img):
     mask = np.array(rgba.getchannel("A")) > 16
     labeled, n = ndimage.label(mask)
     if n > 1:
-        # rembg sometimes leaves a disconnected scrap of background - keep only the main subject
+        # drop specks, keep the subject plus doodles around it (hearts, question marks ...)
         sizes = ndimage.sum(mask, labeled, range(1, n + 1))
-        mask = labeled == (np.argmax(sizes) + 1)
+        mask = np.isin(labeled, np.flatnonzero(sizes >= sizes.max() * 0.003) + 1)
         rgba.putalpha(Image.fromarray(np.where(mask, np.array(rgba.getchannel("A")), 0).astype(np.uint8)))
     bbox = Image.fromarray(mask).getbbox()
     return rgba.crop(bbox) if bbox else rgba
 
 
 # ---------------------------------------------------------------- 4. compose
+def load_font(path, size):
+    font = ImageFont.truetype(str(path), size)
+    if path == FREDOKA:
+        font.set_variation_by_name("Bold")
+    return font
+
+
 def fit_text(draw, text, font_path, has_stroke, max_w, max_h):
     """Largest size where the text (wrapped to <= 2 lines) fits max_w x max_h."""
-    words = text.upper().split()
+    words = text.split()
     candidates = [[" ".join(words)]]
     for i in range(1, len(words)):
         candidates.append([" ".join(words[:i]), " ".join(words[i:])])
     for size in range(96, 17, -2):
-        font = ImageFont.truetype(str(font_path), size)
-        stroke = max(3, size // 12) if has_stroke else 0
+        font = load_font(font_path, size)
+        stroke = max(3, size // 9) if has_stroke else 0
         best = None
         for lines in candidates:
             widths = [draw.textbbox((0, 0), l, font=font, stroke_width=stroke)[2] for l in lines]
@@ -217,7 +235,7 @@ def fit_text(draw, text, font_path, has_stroke, max_w, max_h):
                     best = (score, lines)
         if best:
             return font, stroke, best[1]
-    return ImageFont.truetype(str(font_path), 18), 3 if has_stroke else 0, [" ".join(words)]
+    return load_font(font_path, 18), 3 if has_stroke else 0, [" ".join(words)]
 
 
 def compose(cutout, text, style):
@@ -254,6 +272,8 @@ def compose(cutout, text, style):
             if style.get("badge"):
                 draw.rounded_rectangle((tx - 14, ty - 6, tx + w + 14, ty + font.size * 1.08 + 6),
                                         radius=16, fill=style["badge"])
+            # white outer rim around the colored stroke, like a die-cut text sticker
+            draw.text((tx, ty), line, font=font, fill="white", stroke_width=stroke + 5, stroke_fill="white")
             draw.text((tx, ty), line, font=font, fill=style["fill"], stroke_width=stroke, stroke_fill=style["stroke"])
             ty += line_h
     return canvas
@@ -278,7 +298,7 @@ def main():
     ap.add_argument("--text", action="append", help="use this caption instead of the LLM (repeatable)")
     ap.add_argument("--no-text", action="store_true", help="no text on any sticker, just the stylized image")
     ap.add_argument("--engine", choices=list(ENGINES), default="flux1", help="stylize engine, see above (default flux1)")
-    ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); flux1/sdxl/photomaker only")
+    ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); sdxl/photomaker only")
     ap.add_argument("--no-stylize", action="store_true", help="skip ComfyUI, only cut out the original")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out", type=Path, default=HERE / "out")
@@ -295,9 +315,18 @@ def main():
         stickers = [{"expression": "", "text": t} for t in args.text]
     if not args.text or not args.no_stylize:
         if reachable(OLLAMA_URL):
+            if reachable(COMFY_URL):
+                # ComfyUI keeps FLUX in VRAM after a run; on 6 GB the vision model then crawls into a timeout
+                req = urllib.request.Request(f"{COMFY_URL}/free", data=b'{"unload_models": true, "free_memory": true}',
+                                             headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=30).read()
             print(f"[caption] asking {VISION_MODEL} ...")
-            subject, llm_stickers = caption(src, args.count, args.lang)
-            stickers = stickers or llm_stickers
+            subject, llm_stickers = caption(src, args.count, args.lang, args.text)
+            if args.text:  # keep the given texts, take the poses the model picked for them
+                for s, l in zip(stickers, llm_stickers):
+                    s["expression"] = l["expression"]
+            else:
+                stickers = llm_stickers
             print(f"[caption] subject: {subject}")
         else:
             print("[caption] Ollama not reachable - no captions")
@@ -316,11 +345,12 @@ def main():
         expression, text = stickers[i]["expression"], stickers[i]["text"]
         base = src
         if stylize_on:
-            print(f"[stylize] sticker {i + 1}/{count} (seed {seed + i}, engine {args.engine}) ...")
-            base = stylize(src, subject, expression, seed + i, args.strength, i, args.engine)
+            # same seed for the whole batch: FLUX then draws the same-looking character in the same style
+            print(f"[stylize] sticker {i + 1}/{count} (seed {seed if expression else seed + i}, engine {args.engine}): {expression or '-'}")
+            base = stylize(src, subject, expression, seed if expression else seed + i, args.strength, i, args.engine)
         print(f"[cutout ] sticker {i + 1}/{count} ...")
         cut = cut_out(base)
-        sticker = compose(cut, text, TEXT_STYLES[i % len(TEXT_STYLES)])
+        sticker = compose(cut, text, TEXT_STYLES[seed % len(TEXT_STYLES)])
         path = args.out / f"{stem}_sticker_{i + 1}.webp"
         size, q = save_webp(sticker, path)
         print(f"[done   ] {path}  \"{text}\"  ({size // 1024} KB, q={q})")

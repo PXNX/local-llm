@@ -5,7 +5,8 @@ rem   Extra options are passed through, e.g.:
 rem     2-stickers.bat photo.jpg --count 5 --lang German
 rem     2-stickers.bat photo.jpg --text "Monday mood" --no-stylize
 rem     2-stickers.bat photo.jpg --no-text   (just the stylized image, no caption)
-rem   Default engine is flux1 (FLUX.1 schnell) - SDXL is broken on this ComfyUI build (gray-square
+rem   Default engine is flux1 (FLUX.1 schnell draws the photographed animal/person as a cartoon
+rem   sticker acting out each reaction; one look + text style per batch) - SDXL is broken on this ComfyUI build (gray-square
 rem   bug, see stickers\make_stickers.py). --engine photomaker needs models\photomaker\photomaker-v2.bin
 rem   and only works once SDXL is fixed.
 setlocal
