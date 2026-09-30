@@ -1,47 +1,52 @@
 {
   "1": {
-    "class_type": "CheckpointLoaderSimple",
-    "inputs": { "ckpt_name": "DreamShaperXL_Turbo_v2_1.safetensors" }
+    "class_type": "UnetLoaderGGUF",
+    "inputs": { "unet_name": "flux1-schnell-Q4_K_S.gguf" }
   },
   "2": {
-    "class_type": "EmptyLatentImage",
+    "class_type": "DualCLIPLoaderGGUF",
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5-v1_1-xxl-encoder-Q5_K_M.gguf",
+      "type": "flux"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "ae.safetensors" }
+  },
+  "5": {
+    "class_type": "EmptySD3LatentImage",
     "inputs": { "width": 1024, "height": 1024, "batch_size": 1 }
   },
-  "4": {
+  "6": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "clip": ["1", 1],
+      "clip": ["2", 0],
       "text": "PROMPT"
     }
   },
-  "5": {
-    "class_type": "CLIPTextEncode",
-    "inputs": {
-      "clip": ["1", 1],
-      "text": "text, letters, watermark, signature, photo, realistic, 3d render, detailed shading, gradient, busy background, frame, cropped, multiple characters, blurry, lowres"
-    }
-  },
-  "6": {
+  "7": {
     "class_type": "KSampler",
     "inputs": {
       "model": ["1", 0],
-      "positive": ["4", 0],
-      "negative": ["5", 0],
-      "latent_image": ["2", 0],
+      "positive": ["6", 0],
+      "negative": ["6", 0],
+      "latent_image": ["5", 0],
       "seed": 0,
-      "steps": 8,
-      "cfg": 2.0,
-      "sampler_name": "dpmpp_sde",
-      "scheduler": "karras",
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
       "denoise": 1.0
     }
   },
-  "7": {
+  "9": {
     "class_type": "VAEDecode",
-    "inputs": { "samples": ["6", 0], "vae": ["1", 2] }
+    "inputs": { "samples": ["7", 0], "vae": ["3", 0] }
   },
   "8": {
     "class_type": "SaveImage",
-    "inputs": { "images": ["7", 0], "filename_prefix": "caricature/img" }
+    "inputs": { "images": ["9", 0], "filename_prefix": "caricature/img" }
   }
 }

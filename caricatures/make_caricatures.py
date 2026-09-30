@@ -4,7 +4,7 @@ refinery, Kremlin, oil tanker ...) in several views/states - optionally as trans
 
 Pipeline per person:
   1. Features - for --photo, Ollama's vision model describes the look (hair, glasses, beard ...)
-  2. Draw     - ComfyUI SDXL Turbo: text-to-image for known names, img2img from the photo otherwise
+  2. Draw     - ComfyUI FLUX.1 schnell (GGUF): text-to-image for known names, img2img from the photo otherwise
   3. Cut out  - rembg removes the background (--cutout)
   4. Vector   - vtracer traces an SVG, flat cartoons trace very cleanly (--vectorize)
 
@@ -35,7 +35,7 @@ OLLAMA_URL = "http://127.0.0.1:11434"
 VISION_MODEL = "qwen3-vl:4b"
 
 STYLE = ("simple flat 2D political satire cartoon, thick black outlines, flat pastel colors, "
-         "minimal shading, centered, plain white background")
+         "minimal shading, centered, plain white background, no text, no letters, no watermark")
 PERSON = "caricature of {subject}, {variant}, oversized round head, small body, simple dot eyes, full body, " + STYLE
 THING = "{subject}, {variant}, cute simplified cartoon drawing, chunky rounded shapes, " + STYLE
 
@@ -102,17 +102,17 @@ def describe(img):
 # ---------------------------------------------------------------- 2. draw
 def draw(prompt, seed, photo=None, strength=0.75):
     wf = json.loads((HERE / "caricature_workflow_api.json").read_text())
-    wf["4"]["inputs"]["text"] = prompt
-    wf["6"]["inputs"]["seed"] = seed
+    wf["6"]["inputs"]["text"] = prompt
+    wf["7"]["inputs"]["seed"] = seed
     if photo is not None:
         # img2img: start from the photo (pre-scaled to ~1 MP, multiples of 64) instead of noise
         scale = (1024 * 1024 / (photo.width * photo.height)) ** 0.5
         w, h = max(64, round(photo.width * scale / 64) * 64), max(64, round(photo.height * scale / 64) * 64)
         photo.convert("RGB").resize((w, h), Image.LANCZOS).save(COMFY_DIR / "input" / "caricature_input.png")
-        wf["2"] = {"class_type": "LoadImage", "inputs": {"image": "caricature_input.png"}}
-        wf["3"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["2", 0], "vae": ["1", 2]}}
-        wf["6"]["inputs"]["latent_image"] = ["3", 0]
-        wf["6"]["inputs"]["denoise"] = strength
+        wf["10"] = {"class_type": "LoadImage", "inputs": {"image": "caricature_input.png"}}
+        wf["11"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["10", 0], "vae": ["3", 0]}}
+        wf["7"]["inputs"]["latent_image"] = ["11", 0]
+        wf["7"]["inputs"]["denoise"] = strength
 
     pid = http_json(f"{COMFY_URL}/prompt", {"prompt": wf})["prompt_id"]
     while True:
@@ -133,13 +133,41 @@ def draw(prompt, seed, photo=None, strength=0.75):
 _session = None
 
 
+def flood_cut_out(img, tolerance=40):
+    """Flat cartoons on a plain background: flood-fill the background from the border. Unlike
+    rembg it keeps white parts inside the drawing (cabins, teeth ...) and gives a hard 0/255
+    alpha, which vtracer needs to trace the cutout cleanly. None if the background is not plain."""
+    import numpy as np
+    from scipy import ndimage
+    px = np.asarray(img.convert("RGB")).astype(int)
+    border = np.concatenate([px[0], px[-1], px[:, 0], px[:, -1]])
+    bg_color = np.median(border, axis=0)
+    labels, _ = ndimage.label(np.abs(px - bg_color).max(axis=2) <= tolerance)
+    touching = set(labels[0]) | set(labels[-1]) | set(labels[:, 0]) | set(labels[:, -1])
+    touching.discard(0)
+    fg = ~np.isin(labels, list(touching))
+    fg = ndimage.binary_opening(fg)  # drop specks
+    labels, count = ndimage.label(fg)
+    if count == 0 or not 0.03 < fg.mean() < 0.9:
+        return None
+    biggest = 1 + int(np.argmax(ndimage.sum(fg, labels, range(1, count + 1))))
+    mask = ndimage.binary_fill_holes(labels == biggest)
+    rgba = Image.fromarray(np.dstack([np.asarray(img.convert("RGB")), mask.astype(np.uint8) * 255]), "RGBA")
+    return rgba.crop(rgba.getchannel("A").getbbox())
+
+
 def cut_out(img):
+    rgba = flood_cut_out(img)
+    if rgba is not None:
+        return rgba
     global _session
     from rembg import new_session, remove
     if _session is None:
         _session = new_session("isnet-general-use")
     rgba = remove(img.convert("RGB"), session=_session)
-    bbox = rgba.getchannel("A").point(lambda v: 255 if v > 16 else 0).getbbox()
+    # hard alpha: vtracer mis-traces semi-transparent pixels
+    rgba.putalpha(rgba.getchannel("A").point(lambda v: 255 if v > 128 else 0))
+    bbox = rgba.getchannel("A").getbbox()
     return rgba.crop(bbox) if bbox else rgba
 
 
@@ -174,6 +202,8 @@ def main():
 
     if not args.who and not args.photo and not args.thing:
         ap.error("give --who \"Name\", --thing \"object\" and/or --photo image.jpg")
+    if args.vectorize:
+        args.cutout = True  # tracing the uncut image would also trace the white background
     if not reachable(COMFY_URL):
         sys.exit("ComfyUI is not running (start-comfyui.bat)")
 
