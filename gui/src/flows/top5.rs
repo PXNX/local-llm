@@ -20,6 +20,7 @@ pub struct Top5 {
     headline: String,
     title_bar: bool,
     audio: String,
+    music_style: String,
     batch: u32,
     subscribe: bool,
     subscribe_text: String,
@@ -53,6 +54,7 @@ impl Default for Top5 {
             headline: String::new(),
             title_bar: false,
             audio: "music".into(),
+            music_style: "auto".into(),
             batch: 1,
             subscribe: true,
             subscribe_text: "Please subscribe for more!".into(),
@@ -142,6 +144,19 @@ impl Flow for Top5 {
                 ],
             );
             ui.end_row();
+            if self.audio == "music" {
+                w::label(ui, "Music style", "");
+                w::choice(
+                    ui,
+                    "music_style",
+                    &mut self.music_style,
+                    &[
+                        ("auto", "upbeat pluck (funny) / music-box (cute), full drums"),
+                        ("clarinet", "mellow woodwind melody, soft drums - wholesome, fits cute cats"),
+                    ],
+                );
+                ui.end_row();
+            }
             w::label(ui, "Videos per run", "each with different clips");
             ui.add(egui::DragValue::new(&mut self.batch).range(1..=10));
             ui.end_row();
@@ -215,6 +230,9 @@ impl Flow for Top5 {
         flag(&mut a, "--title-bar", self.title_bar);
         if self.audio != d.audio {
             opt(&mut a, "--audio", &self.audio);
+        }
+        if self.audio == "music" && self.music_style != d.music_style {
+            opt(&mut a, "--music-style", &self.music_style);
         }
         num(&mut a, "--batch", self.batch, d.batch);
         flag(&mut a, "--intro", self.intro);
