@@ -780,7 +780,7 @@ def mux(video, out, cover=None, audio=None):
     if audio:
         ins += ["-i", str(audio)]
         maps += ["-map", "1:a:0"]
-        acodec = [*AENC, "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-shortest"]
+        acodec = [*AENC, "-af", "loudnorm=I=-14:TP=-1.5:LRA=11"]  # no -shortest: the 1-frame cover would cut it
     else:
         maps += ["-map", "0:a:0"]
         acodec = ["-c:a", "copy"]
