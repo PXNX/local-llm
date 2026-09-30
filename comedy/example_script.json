@@ -1,0 +1,34 @@
+{
+  "title": "The Refinery Is Fine",
+  "lang": "English",
+  "cast": [
+    {"name": "Trump", "who": "Donald Trump", "gender": "male"},
+    {"name": "Zelensky", "who": "Volodymyr Zelensky", "gender": "male"},
+    {"name": "Putin", "who": "Vladimir Putin", "gender": "male"}
+  ],
+  "scenes": [
+    {
+      "background": "room",
+      "stage": ["Zelensky", "Trump"],
+      "beats": [
+        {"who": "Trump", "say": "Folks, I talked to Vladimir. He wants peace. Tremendous peace.", "face": "smug", "shot": "medium"},
+        {"who": "Zelensky", "say": "He attacked us again this morning.", "face": "neutral", "shot": "close"},
+        {"pause": 1.4, "who": "Trump", "face": "shocked"},
+        {"who": "Trump", "say": "Peacefully, I'm sure.", "face": "laughing", "do": "shrug", "sfx": "rimshot"},
+        {"who": "Zelensky", "say": "Okay. Then we send him some peaceful drones.", "face": "smug", "do": "nod"}
+      ]
+    },
+    {
+      "background": "map of the Black Sea",
+      "label": "RUSSIA",
+      "stage": ["oil refinery", "Putin"],
+      "beats": [
+        {"who": "Putin", "say": "Our refineries are the safest in the world.", "face": "smug", "shot": "medium"},
+        {"thing": "Shahed drone", "event": "hit", "target": "oil refinery", "shot": "wide"},
+        {"pause": 1.2, "who": "Putin", "face": "shocked"},
+        {"who": "Putin", "say": "Just a small smoking accident.", "face": "crying", "shot": "close", "sfx": "sad_trombone"},
+        {"who": "Putin", "do": "fall", "sfx": "boing"}
+      ]
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 mod animate;
 mod caricatures;
 mod characters;
+mod comedy;
 mod img2video;
 mod soundfx;
 mod stickers;
@@ -102,6 +103,7 @@ pub enum FlowId {
     Characters,
     Vectorize,
     SoundFx,
+    Comedy,
 }
 
 impl FlowId {
@@ -117,16 +119,18 @@ impl FlowId {
             FlowId::Characters => ACCOUNT_GROUP,
             FlowId::Vectorize => VECTOR_CURVE,
             FlowId::SoundFx => WAVEFORM,
+            FlowId::Comedy => EMOTICON_LOL_OUTLINE,
         }
     }
 
-    pub const ALL: [FlowId; 9] = [
+    pub const ALL: [FlowId; 10] = [
         FlowId::Stickers,
         FlowId::Animate,
         FlowId::Caricatures,
         FlowId::Objects,
         FlowId::Img2Video,
         FlowId::Top5,
+        FlowId::Comedy,
         FlowId::Characters,
         FlowId::Vectorize,
         FlowId::SoundFx,
@@ -146,6 +150,7 @@ pub struct Forms {
     characters: characters::Characters,
     vectorize: vectorize::Vectorize,
     soundfx: soundfx::SoundFx,
+    comedy: comedy::Comedy,
 }
 
 impl Default for Forms {
@@ -160,6 +165,7 @@ impl Default for Forms {
             characters: Default::default(),
             vectorize: Default::default(),
             soundfx: Default::default(),
+            comedy: Default::default(),
         }
     }
 }
@@ -176,6 +182,7 @@ impl Forms {
             FlowId::Characters => &self.characters,
             FlowId::Vectorize => &self.vectorize,
             FlowId::SoundFx => &self.soundfx,
+            FlowId::Comedy => &self.comedy,
         }
     }
 
@@ -190,6 +197,7 @@ impl Forms {
             FlowId::Characters => &mut self.characters,
             FlowId::Vectorize => &mut self.vectorize,
             FlowId::SoundFx => &mut self.soundfx,
+            FlowId::Comedy => &mut self.comedy,
         }
     }
 }
@@ -272,6 +280,8 @@ mod tests {
             (Box::new(serde_json::from_value::<vectorize::Vectorize>(json!({"image": img, "style": "logo", "mode": "bw", "out": "a.svg"})).unwrap()), "vec"),
             (Box::new(soundfx::SoundFx::default()), "sfx"),
             (Box::new(serde_json::from_value::<soundfx::SoundFx>(json!({"speech_mode": true, "speech": [img], "denoise": 0.5})).unwrap()), "speech"),
+            (Box::new(serde_json::from_value::<comedy::Comedy>(json!({"topic": "Greenland", "cast": ["Trump"], "lang": "German", "seconds": 45, "preview": false, "format": "vertical", "draw_missing": false, "music": "none", "subtitles": false, "handle": "@x", "workers": 2, "seed": 4})).unwrap()), "comedy"),
+            (Box::new(serde_json::from_value::<comedy::Comedy>(json!({"from_script": true, "script": img, "use_screenshots": true, "end_card": false, "voice_engine": "sapi"})).unwrap()), "comedy script"),
         ];
         let harness = r#"
 import argparse, runpy, sys

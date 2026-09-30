@@ -85,6 +85,11 @@ def label():
     return f"{model()} via {provider()}"
 
 
+def text_label():
+    local = _ENV.get("OLLAMA_TEXT_MODEL") or ollama_model()
+    return f"{local} via ollama" if is_local() else label()
+
+
 def is_local():
     return provider() == "ollama"
 

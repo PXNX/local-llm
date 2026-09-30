@@ -52,6 +52,8 @@ GPU memory, so ComfyUI keeps its models loaded between runs.
 | `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
 | `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`.env`) and the vision AI (OpenRouter or Ollama, rates the clips). Fluent Emoji (Iconify) on the cards and thumbnail; every processed post is logged with its `t.me` link. Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
 | `10-image-to-video.bat` | Image -> short animated MP4 clip (the image is the first frame). Drag & drop an image onto it or double-click and pick one. The vision AI writes the motion prompt unless you give `--prompt`. `--res 480p|720p|1080p|1440p|4k` (above 720p the clip is upscaled from Wan's 720p maximum). Wan 2.2 TI2V 5B in ComfyUI (already downloaded), roughly 10-30 min per clip. Starts Ollama + ComfyUI automatically. Result: `img2video\out\` |
+| `12-comedy.bat` | Topic -> political comedy cartoon sketch in the style of freeonis, **1080p 60 fps**: an LLM writes the sketch, the cast comes from the other flows (caricatures of flow 7, objects of flow 8, optionally the screenshots of flow 6, sounds of flows 5/9), local voices (Kokoro), cutout animation with cuts to close-ups, drones hitting refineries, explosions, subtitles. Double-click and enter a topic, or drag & drop a `script.json` onto it. Starts ComfyUI to draw missing caricatures. Result: `comedy\out\<title>\` |
+| `12-comedy-preview.bat` | The same in **480p 30 fps** for a quick check of jokes and timing (doesn't start ComfyUI, missing drawings become placeholders). Then edit `script.json` and drag it onto `12-comedy.bat` |
 | `11-animate-stickers.bat` | Stickers from Flow 2 -> animated Telegram video stickers (WebM VP9 with transparency, 512 px, max 3 s, max 256 KB). Drag & drop a sticker folder (`stickers\out\<image name>\`) or `.webp` files onto it, or double-click and pick a folder. Each character acts out its own pose (the raised paw waves, the hug squeezes tighter, the dancer dances ...) with Wan 2.2 in ComfyUI, roughly 5-15 min per sticker; `--mode loop` is a quick CPU-only fallback. Result: `<sticker>.webm` next to each sticker |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
@@ -160,6 +162,35 @@ Pipeline: `qwen3-vl:4b` (Ollama, unloaded right after) describes the scene + one
 -> Wan 2.2 TI2V 5B generates the remaining frames (uni_pc, 20 steps, CFG 5, shift 8) -> H.264 MP4 at 24 fps,
 plus a `.txt` with the prompt next to it. The workflow is `img2video/img2video_workflow_api.json` (can be
 dragged into ComfyUI); the 5B fp16 model is bigger than the 6 GB VRAM and gets offloaded to RAM (`--lowvram`).
+
+### Comedy sketch options (`12-comedy.bat` / `12-comedy-preview.bat`)
+- `--topic "Putin explains the refinery fires"` what the sketch is about, `--cast Trump --cast Zelensky` who is in it
+  (default: the LLM picks 2-3 fitting leaders), `--seconds 60` rough length, `--lang English` dialogue language
+- `--script comedy\out\<title>\script.json` render an earlier (edited) script instead of writing a new one;
+  `--write-only` only writes `script.json` + a readable `script.txt`. `comedy\example_script.json` is a ready example
+- `--preview` 480p 30 fps (what `12-comedy-preview.bat` passes), default 1080p 60 fps; `--format vertical` 1080x1920 for Shorts
+- `--no-generate` never draw in ComfyUI (placeholders for missing drawings), `--use-screenshots` fall back to the flow-6
+  screenshots of the channel - those are freeonis' own character designs, fine for testing, not for publishing
+- `--music calm|funny|none` quiet music bed that ducks under the dialogue, `--no-subtitles`, `--no-end-card`, `--handle @mychannel`
+- `--voice-engine kokoro|sapi`, `--workers 6` parallel render processes, `--seed 42`
+
+Pipeline: the text LLM (`common/llm.py`: OpenRouter, or local Ollama - set `OLLAMA_TEXT_MODEL=qwen3:8b` in `.env`, it
+writes better jokes than the default vision model) writes the sketch as JSON: cast, scenes (background: `plain`,
+`room`, `city`, `field`, `night`, `map of <region>` or any place, an optional CAPS label), and beats - lines with a
+face (neutral, laughing, angry, shocked, smug, crying), camera shot (wide/medium/close), action (jump, shake, shrug,
+nod, tremble, fall, spin, zoom, enter/exit), listener reactions, silent stares, events for things (appear, vanish,
+fly_across, explode, hit = a drone/missile flies into its target, which explodes and burns) and sound effects
+(explosion, launch, whoosh, boing, rimshot, crickets, sad_trombone, ding, slap, or any WAV in `soundfx\out\` by name).
+The cast is looked up in `caricatures\out\` (one file per expression, as flow 7 names them; things by name incl.
+sets like `caricatures\out\ww3\<thing>\cutout.png`); missing ones are drawn with FLUX.1 through
+`caricatures/make_caricatures.py` when ComfyUI runs and saved there for the next sketch, other backgrounds too
+(`comedy\cache\bg\`). Kokoro-82M (ONNX on the CPU, ~350 MB downloaded once to `comedy\models\`) gives every character
+its own voice and pitch (languages Kokoro can't speak use the Windows voices), lines are cached in `comedy\cache\tts\`.
+The renderer animates it as a cutout cartoon: squash & stretch driven by the voice, idle breathing, hard cuts
+with a slow push-in, screen shake, cartoon fireballs, flames and smoke. Frames are drawn in parallel processes
+and encoded with x264 (1080p: `medium`, CRF 18; preview: `veryfast`, CRF 26), then joined with the mixed sound into
+`<title>.mp4` (+ `_preview.mp4`) with a `_thumbnail.jpg` cover. Rough speed on this laptop: a 60 s sketch takes
+~2-3 min as a preview and ~8-10 min in 1080p 60 fps, plus ~1 min per missing drawing.
 
 ### Top-5 video options (`9-top5-videos.bat [options]`)
 - `--topic funny` / `cute` / `auto` (default: whichever theme has the stronger top 5 today), `--subject animals` only clips about that
