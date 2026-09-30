@@ -255,6 +255,10 @@ def score(grid, caption, subject, lang):
         '{"funny": <0-10, how funny/hilarious it is (fails, pranks, absurd moments)>, '
         '"cute": <0-10, how cute/wholesome it is (babies, puppies, kittens, sweet moments)>, '
         '"entertainment": <true if it is a fun/cute clip, false for news, war, ads, promos, talking heads, text slides>, '
+        '"political": <true if it touches politics, politicians or other real public figures (also as caricatures '
+        'or memes), war, military, soldiers, weapons, protests, elections, national conflicts, propaganda or news>, '
+        '"wholesome": <0-10, how wholesome and family-friendly it is (10 = kind, feel-good, fine for kids; '
+        '0 = mean, gross, violent, sexual, mocking people)>, '
         + subj +
         '"subject": "<2-4 English words, e.g. \\"cat vs cucumber\\">", '
         f'"title": "<catchy title in {lang}, max 6 words, no hashtags, no emojis>"}}'
@@ -264,14 +268,35 @@ def score(grid, caption, subject, lang):
     return {
         "funny": num("funny"), "cute": num("cute"),
         "entertainment": bool(d.get("entertainment", True)),
+        "political": d.get("political") not in (False, "false", "no", 0),  # unsure counts as political
+        "wholesome": num("wholesome"),
         "fits_subject": bool(d.get("fits_subject", True)),
         "subject": str(d.get("subject", "")).strip(),
         "title": re.sub(r"[#\"]", "", str(d.get("title", "")).strip())[:60],
     }
 
 
-def pick(cands, topic, subject, n):
-    ok = [c for c in cands if c.get("ai") and c["ai"]["entertainment"] and (not subject or c["ai"]["fits_subject"])]
+# second line of defence next to the VLM's "political" flag (caption, title and subject are checked)
+POLITICAL = re.compile(
+    r"\b(polit\w*|putin\w*|russ\w*|kreml\w*|kremlin|ukrain\w*|selenskyj?|zelensk\w*|trump\w*|biden|harris|merz|"
+    r"scholz|habeck|baerbock|weidel|afd|cdu|spd|nato|election\w*|wahlen|wahlkampf|vote|warfare|krieg\w*|"
+    r"soldier\w*|soldat\w*|army|armee|milit\w*|drone\w*|drohne\w*|missile\w*|rakete\w*|panzer\w*|weapon\w*|"
+    r"waffe\w*|protest\w*|propaganda|fake news|nachrichten|israel\w*|gaza|hamas|iran\w*|china|"
+    r"communis\w*|kommunis\w*|nazi\w*|faschis\w*|fascis\w*|kanzler\w*|president\w*|pr[äa]sident\w*|minister\w*|"
+    r"regierung\w*|government|parliament|bundestag)\b", re.I)
+
+
+def clean(c, min_wholesome):
+    """Wholesome and non-political only."""
+    a = c["ai"]
+    text = " ".join([c.get("text", ""), a.get("title", ""), a.get("subject", "")])
+    return (not a.get("political", True) and a.get("wholesome", 0) >= min_wholesome
+            and not POLITICAL.search(text))
+
+
+def pick(cands, topic, subject, n, min_wholesome=6):
+    ok = [c for c in cands if c.get("ai") and c["ai"]["entertainment"] and (not subject or c["ai"]["fits_subject"])
+          and clean(c, min_wholesome)]
     if not ok:
         return topic if topic != "auto" else "funny", []
     # engagement bonus: 0..2 points by rank among the candidates, so the AI score dominates
@@ -702,6 +727,33 @@ def subscribe_frames(folder, W, H, text="Please subscribe for more!"):
 
 
 # ---------------------------------------------------------------- 4. video
+def best_window(path, dur, length, has_audio):
+    """Start of the liveliest `length` seconds: the loudest stretch of the clip's own audio (reactions,
+    laughter, the punchline), nudged a little towards the end where memes land their joke.
+    Only used to choose the cut - the original sound itself is not kept unless --audio original."""
+    if dur <= length + 0.5:
+        return 0.0
+    if not has_audio:
+        return round((dur - length) / 2, 2)
+    import numpy as np
+
+    step = 0.25
+    buckets = np.zeros(int(dur / step) + 2)
+    try:
+        with av.open(str(path)) as con:
+            for fr in con.decode(con.streams.audio[0]):
+                if fr.time is not None:
+                    a = fr.to_ndarray().astype(np.float32)
+                    buckets[min(len(buckets) - 1, int(fr.time / step))] += float((a * a).mean())
+    except Exception:
+        return round((dur - length) / 2, 2)
+    win = max(1, int(length / step))
+    sums = np.convolve(buckets, np.ones(win), "valid")
+    starts = np.arange(len(sums)) * step
+    sums *= 1 + 0.15 * starts / max(starts.max(), 1e-6)
+    return round(float(min(starts[int(sums.argmax())], dur - length)), 2)
+
+
 def still_at(path, t):
     """A frame from about t seconds in (the first frame is often black or a title)."""
     with av.open(str(path)) as con:
@@ -855,7 +907,7 @@ async def run(args):
         try:
             c["file_dur"], c["has_audio"] = probe(c["path"])
             ck = f"{c['key']}|{args.subject or ''}|{args.lang}"
-            if ck not in cache:
+            if ck not in cache or "wholesome" not in cache[ck]:
                 cache[ck] = score(frame_grid(c["path"], c["file_dur"] or c["duration"]), c["text"], args.subject, args.lang)
                 CACHE.write_text(json.dumps(cache, indent=1, ensure_ascii=False), encoding="utf-8")
             c["ai"] = cache[ck]
@@ -869,7 +921,7 @@ async def run(args):
     pool = [c for c in cands if c.get("ai")]
     made = []
     for v in range(1, args.batch + 1):
-        topic, top = pick(pool, args.topic, args.subject, args.count)
+        topic, top = pick(pool, args.topic, args.subject, args.count, args.min_wholesome)
         if len(top) < 2:
             if not made:
                 sys.exit(f"Only {len(top)} usable clip(s) - not enough for a ranking. "
@@ -901,7 +953,9 @@ def render_video(top, topic, args, now, W, H, suffix=""):
     headline = args.headline or f"Top {n} {word} Videos of Today"
     order = sorted(top, key=lambda c: -c["rank"])  # countdown: #5 first
     for c in order:
-        c["len"] = min(args.clip_seconds, c["file_dur"] or c["duration"])
+        full = c["file_dur"] or c["duration"]
+        c["len"] = min(args.clip_seconds, full)
+        c["start"] = best_window(c["path"], full, c["len"], c["has_audio"])
 
     # subscribe prompt in the middle: the clip closest to the half-way mark that is long enough for it
     t, spans = (args.intro_seconds if args.intro else 0.0), []
@@ -932,14 +986,14 @@ def render_video(top, topic, args, now, W, H, suffix=""):
     for c in order:
         r = c["rank"]
         title = c["ai"]["title"] or c["ai"]["subject"]
-        c["still"] = still_at(c["path"], c["len"] * 0.4)
+        c["still"] = still_at(c["path"], c["start"] + c["len"] * 0.4)
         card_src = card_frames(work / f"card_{r}", W, H, r, title, RANK_COLORS[r], c["still"],
                                None if args.intro else headline, args.card_seconds, topic)
         badge(work / f"badge_{r}.png", W, H, r, title if args.title_bar else "", None if args.intro else headline)
         print(f"[video] #{r}: {c['len']:.1f}s")
         render_card(card_src, args.card_seconds, work / f"{10 - r:02d}a_card.mp4", args)
         # the clips' own sound (often copyrighted music) is only kept with --audio original
-        render_clip(c["path"], work / f"badge_{r}.png", 0.0, c["len"], c["has_audio"] and args.audio == "original",
+        render_clip(c["path"], work / f"badge_{r}.png", c["start"], c["len"], c["has_audio"] and args.audio == "original",
                     W, H, work / f"{10 - r:02d}b_clip.mp4", args, extra=sub.get(r))
         parts += [work / f"{10 - r:02d}a_card.mp4", work / f"{10 - r:02d}b_clip.mp4"]
 
@@ -981,8 +1035,12 @@ def main():
     ap.add_argument("--min-duration", type=float, default=3)
     ap.add_argument("--max-duration", type=float, default=180, help="skip longer videos (default 180 s)")
     ap.add_argument("--max-mb", type=float, default=150, help="skip larger files (default 150 MB)")
-    ap.add_argument("--clip-seconds", type=float, default=30, help="cut each clip to this length (default 30 s)")
-    ap.add_argument("--card-seconds", type=float, default=2.0)
+    ap.add_argument("--clip-seconds", type=float, default=10,
+                    help="max length per clip, the liveliest part is used (default 10 s: 5 places stay under 60 s)")
+    ap.add_argument("--card-seconds", type=float, default=1.2)
+    ap.add_argument("--min-wholesome", type=float, default=6,
+                    help="only clips the VLM rates at least this wholesome, 0-10 (default 6); political clips are "
+                         "always left out")
     ap.add_argument("--intro", action="store_true",
                     help="separate headline card at the start (default: headline on the rank cards, loops seamlessly)")
     ap.add_argument("--intro-seconds", type=float, default=3.0)
@@ -1001,7 +1059,8 @@ def main():
     ap.add_argument("--nvenc", action="store_true", help="encode on the GPU (needs NVIDIA driver >= 570)")
     ap.add_argument("--keep-work", action="store_true", help="keep the intermediate cards/clips")
     ap.add_argument("--cached-only", action="store_true",
-                    help="only use clips that are already downloaded and rated (no new downloads, no VLM)")
+                    help="only use clips that are already downloaded and rated (no new downloads; only ratings from "
+                         "before the wholesome/political check are redone)")
     args = ap.parse_args()
     # channel names/captions contain emojis, which the Windows console codepage can't print
     sys.stdout.reconfigure(errors="replace")
