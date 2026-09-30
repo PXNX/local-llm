@@ -260,7 +260,8 @@ fn segments(line: &Line) -> Vec<(&str, Option<egui::Color32>, Option<Target>)> {
             Some(false)
         } else if rest.len() > 3
             && rest.as_bytes()[0].is_ascii_alphabetic()
-            && &rest[1..3] == ":\\"
+            // bytes, not &rest[1..3]: that str slice panics when it ends inside a multi-byte char ("mehr 🍌")
+            && &rest.as_bytes()[1..3] == b":\\"
             && (i == 0 || text.as_bytes()[i - 1] == b' ')
         {
             Some(true)
@@ -316,5 +317,13 @@ mod tests {
         assert_eq!(urls, ["https://t.me/budyarchive/123"]);
         assert_eq!(paths, [r"C:\out\a.mp4"]);
         assert_eq!(segs.iter().map(|(s, _, _)| *s).collect::<String>(), line.text);
+    }
+
+    #[test]
+    fn multibyte_chars_do_not_panic() {
+        for text in ["[chan ] 🍌 Memes und mehr 🍌 #Россия: 4 video(s)", "Abonniere @NYX_Memes für mehr!", "a ü", "x 😂 C:\\out"] {
+            let line = Line { time: "00:00:00".into(), text: text.into(), err: false, colors: Vec::new() };
+            assert_eq!(segments(&line).iter().map(|(s, _, _)| *s).collect::<String>(), text);
+        }
     }
 }

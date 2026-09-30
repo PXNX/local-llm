@@ -183,11 +183,15 @@ async def collect(client, channels, since, args):
             continue
         name = getattr(ent, "title", None) or getattr(ent, "username", ref)
         username = getattr(ent, "username", None)
-        vids, all_views = [], []
+        vids, all_views, line_count, posts = [], [], {}, 0
         async for msg in client.iter_messages(ent, limit=args.scan_limit):
             if msg.date < since:
                 break
             all_views.append(msg.views or 0)
+            if msg.message:
+                posts += 1
+                for line in {l.strip() for l in msg.message.splitlines() if l.strip()}:
+                    line_count[line] = line_count.get(line, 0) + 1
             v = msg.video
             if not v or msg.video_note or msg.gif:
                 continue
@@ -200,13 +204,17 @@ async def collect(client, channels, since, args):
             seen |= keys
             vids.append((msg, dur))
         base = max(1.0, sorted(all_views)[len(all_views) // 2]) if all_views else 1.0  # median views
+        # the channel's footer ("subscribe to ...", donation links) repeats under most posts: drop it, so it
+        # neither trips the political filter nor distracts the VLM
+        footer = {l for l, k in line_count.items() if k >= max(3, 0.4 * posts)}
         for msg, dur in vids:
             views, reacts, fwd = engagement(msg)
+            text = "\n".join(l for l in (msg.message or "").splitlines() if l.strip() not in footer).strip()
             found.append({
                 "key": f"{ent.id}_{msg.id}", "channel": name, "chan_id": ent.id, "msg_id": msg.id,
                 # public channels: t.me/<name>/<id> opens for everyone; t.me/c/... only for members
                 "link": f"https://t.me/{username}/{msg.id}" if username else f"https://t.me/c/{ent.id}/{msg.id}",
-                "date": msg.date.isoformat(), "duration": float(dur), "text": (msg.message or "")[:400],
+                "date": msg.date.isoformat(), "duration": float(dur), "text": text[:400],
                 "views": views, "reactions": reacts, "forwards": fwd,
                 "eng": views / base + 20 * reacts / base + 10 * fwd / base,
                 "_msg": msg,
@@ -913,6 +921,7 @@ async def run(args):
             c["ai"] = cache[ck]
             a = c["ai"]
             print(f"[rate ] {i}/{len(cands)} {c['channel'][:20]:20} funny {a['funny']:4.1f} cute {a['cute']:4.1f} "
+                  f"wholesome {a.get('wholesome', 0):4.1f} {'' if clean(c, args.min_wholesome) else '(left out) '}"
                   f"{'' if a['entertainment'] else '(not fun) '}{a['subject']}  {c['link']}")
         except Exception as e:
             print(f"[rate ] {c['key']}: skipped ({e})")
