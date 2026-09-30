@@ -68,6 +68,22 @@ pub fn setx(key: &str, value: &str) -> Result<(), String> {
     }
 }
 
+/// Wall-clock "HH:MM:SS" for log lines, in the machine's local time zone.
+#[cfg(windows)]
+pub fn now_hms() -> String {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut t: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    unsafe { GetLocalTime(&mut t) };
+    format!("{:02}:{:02}:{:02}", t.wHour, t.wMinute, t.wSecond)
+}
+
+#[cfg(not(windows))]
+pub fn now_hms() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() % 86_400;
+    format!("{:02}:{:02}:{:02}", secs / 3600, (secs / 60) % 60, secs % 60)
+}
+
 pub fn human(bytes: u64) -> String {
     const GB: f64 = 1024.0 * 1024.0 * 1024.0;
     const MB: f64 = 1024.0 * 1024.0;

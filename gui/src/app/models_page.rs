@@ -126,6 +126,24 @@ impl App {
                         );
                     });
             }
+            let mut local_groups: Vec<&str> = Vec::new();
+            for m in models.local.iter() {
+                if !local_groups.contains(&m.group.as_str()) {
+                    local_groups.push(&m.group);
+                }
+            }
+            for group in local_groups {
+                egui::CollapsingHeader::new(RichText::new(group).strong()).default_open(true).show(ui, |ui| {
+                    egui::Grid::new(("l", group)).num_columns(4).striped(true).spacing([12.0, 4.0]).min_col_width(70.0).show(ui, |ui| {
+                        for m in models.local.iter().filter(|m| m.group == group) {
+                            ui.label(&m.file).on_hover_text(format!("{}/{}\nused by: {}", m.dir, m.file, m.used_by));
+                            ui.label(m.size.map(sys::human).unwrap_or_else(|| "?".into()));
+                            row_status(ui, &models, &m.id, "");
+                            ui.end_row();
+                        }
+                    });
+                });
+            }
         });
         if active {
             ui.ctx().request_repaint_after(Duration::from_millis(250));

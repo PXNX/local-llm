@@ -55,10 +55,25 @@ pub struct OllamaModel {
     pub size: Option<u64>,
 }
 
+/// A model file that is neither a ComfyUI weight nor an Ollama model - e.g. the comedy flow's
+/// Kokoro TTS voices - kept in one repo-relative folder instead of the configurable model roots.
+#[derive(Deserialize, Clone)]
+pub struct LocalModel {
+    pub id: String,
+    pub group: String,
+    pub used_by: String,
+    pub dir: String,
+    pub file: String,
+    pub size: Option<u64>,
+    pub url: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct Manifest {
     comfy: Vec<ComfyModel>,
     ollama: Vec<OllamaModel>,
+    #[serde(default)]
+    local: Vec<LocalModel>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -142,6 +157,8 @@ struct Queue {
 pub struct Models {
     pub comfy: Arc<Vec<ComfyModel>>,
     pub ollama: Arc<Vec<OllamaModel>>,
+    pub local: Arc<Vec<LocalModel>>,
+    repo: Arc<PathBuf>,
     shared: Arc<Mutex<Shared>>,
     queue: Arc<Queue>,
     ctx: egui::Context,
@@ -159,6 +176,8 @@ impl Models {
         let m = Self {
             comfy: Arc::new(manifest.comfy),
             ollama: Arc::new(manifest.ollama),
+            local: Arc::new(manifest.local),
+            repo: Arc::new(repo.to_path_buf()),
             shared: Arc::default(),
             queue: Arc::new(Queue { items: Mutex::default(), ready: Condvar::new() }),
             ctx: ctx.clone(),
@@ -201,6 +220,10 @@ impl Models {
         self.comfy.iter().find(|m| m.id == id)
     }
 
+    pub fn local_model(&self, id: &str) -> Option<&LocalModel> {
+        self.local.iter().find(|m| m.id == id)
+    }
+
     pub fn missing_bytes(&self, ids: &[String]) -> u64 {
         ids.iter()
             .filter(|id| matches!(self.status(id), Status::Missing { .. } | Status::Unknown))
@@ -223,7 +246,7 @@ impl Models {
     pub fn size_of(&self, id: &str) -> Option<u64> {
         match id.strip_prefix("ollama:") {
             Some(name) => self.ollama.iter().find(|m| m.model == name).and_then(|m| m.size),
-            None => self.comfy_model(id).and_then(|m| m.size),
+            None => self.comfy_model(id).and_then(|m| m.size).or_else(|| self.local_model(id).and_then(|m| m.size)),
         }
     }
 
@@ -330,6 +353,9 @@ impl Models {
                 _ => Status::Missing { partial: 0 },
             };
             status.insert(id, st);
+        }
+        for m in self.local.iter() {
+            status.insert(m.id.clone(), scan_local(m, &self.repo));
         }
         (status, share)
     }
@@ -461,6 +487,9 @@ impl Models {
                 download::ollama_pull(&name, d, t, s)
             });
         }
+        if let Some(model) = self.local_model(id).cloned() {
+            return self.fetch_local(&model, replace, stop);
+        }
         let model = self.comfy_model(id).cloned().ok_or("unknown model")?;
         let (roots, odir, token) = {
             let s = self.shared.lock().unwrap();
@@ -493,6 +522,30 @@ impl Models {
         let target = part.clone();
         download::supervise(expected, stop, &self.progress(id, "downloading"), move |d, t, s| {
             download::http_get(&url, &token, &target, expected, d, t, s)
+        })?;
+        if !in_place {
+            fs::rename(&part, &dest).map_err(|e| format!("rename: {e}"))?;
+        }
+        mark_done(&dest);
+        Ok(())
+    }
+
+    /// A file kept in one fixed repo-relative folder (e.g. the comedy flow's Kokoro voices): no roots,
+    /// no gating, no cross-tool linking.
+    fn fetch_local(&self, model: &LocalModel, replace: bool, stop: &Arc<AtomicBool>) -> Result<(), String> {
+        let dir = self.repo.join(&model.dir);
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let dest = dir.join(&model.file);
+        let url = model.url.clone().ok_or("no download URL - copy the file in by hand")?;
+        let in_place = !replace && dest.exists();
+        let part = if in_place { dest.clone() } else { dir.join(format!("{}.part", model.file)) };
+        if replace {
+            let _ = fs::remove_file(&part);
+        }
+        let expected = model.size;
+        let target = part.clone();
+        download::supervise(expected, stop, &self.progress(&model.id, "downloading"), move |d, t, s| {
+            download::http_get(&url, "", &target, expected, d, t, s)
         })?;
         if !in_place {
             fs::rename(&part, &dest).map_err(|e| format!("rename: {e}"))?;
@@ -560,6 +613,28 @@ fn scan_comfy(m: &ComfyModel, roots: &[PathBuf]) -> Status {
     Status::Missing { partial }
 }
 
+/// Like `scan_comfy`, but for a file kept in one fixed repo-relative folder (no other roots, no linking).
+fn scan_local(m: &LocalModel, repo: &Path) -> Status {
+    let dir = repo.join(&m.dir);
+    let path = dir.join(&m.file);
+    if let Ok(meta) = fs::metadata(&path) {
+        let size = meta.len();
+        let done = done_marker(&path).exists();
+        if done || m.size.is_none_or(|s| s == size) {
+            if !done && m.size.is_some() {
+                mark_done(&path);
+            }
+            return Status::Present(path);
+        }
+        return Status::SizeDiffers { path, size };
+    }
+    if m.url.is_none() {
+        return Status::Manual;
+    }
+    let partial = fs::metadata(dir.join(format!("{}.part", m.file))).map_or(0, |m| m.len());
+    Status::Missing { partial }
+}
+
 /// The same file under its upstream name, or in another models folder, with the right size.
 fn find_linkable(m: &ComfyModel, roots: &[PathBuf]) -> Option<PathBuf> {
     let names: Vec<&str> = std::iter::once(m.file.as_str()).chain(m.upstream_name()).collect();
@@ -614,13 +689,14 @@ mod tests {
     #[test]
     fn manifest_parses_and_ids_are_unique() {
         let m: Manifest = serde_json::from_str(EMBEDDED).unwrap();
-        let mut ids: Vec<&str> = m.comfy.iter().map(|c| c.id.as_str()).collect();
+        let mut ids: Vec<&str> = m.comfy.iter().map(|c| c.id.as_str()).chain(m.local.iter().map(|c| c.id.as_str())).collect();
         let n = ids.len();
         ids.sort();
         ids.dedup();
-        assert_eq!(ids.len(), n);
+        assert_eq!(ids.len(), n, "comfy and local ids must not collide (fetch()/scan() key on them together)");
         assert!(m.comfy.iter().all(|c| c.url.is_some() || !c.note.is_empty()), "manual models need a note");
         assert!(m.comfy.iter().filter_map(|c| c.sha256.as_deref()).all(|s| s.len() == 64));
+        assert!(m.local.iter().all(|c| c.url.is_some()), "local models need a download URL");
     }
 
     #[test]
