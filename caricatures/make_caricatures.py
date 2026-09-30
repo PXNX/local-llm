@@ -156,8 +156,8 @@ def flood_cut_out(img, tolerance=40):
     return rgba.crop(rgba.getchannel("A").getbbox())
 
 
-def cut_out(img):
-    rgba = flood_cut_out(img)
+def cut_out(img, plain_background=True):
+    rgba = flood_cut_out(img) if plain_background else None
     if rgba is not None:
         return rgba
     global _session

@@ -13,12 +13,12 @@ set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 set "ARGS=%*"
 if "%~1"=="" (
   set /p "WHAT=What should be drawn (e.g. S-400 air defense system)? "
-  set /p "VEC=Also cut out + vectorize to SVG? [y/N] "
+  set /p "VEC=Also cut out + trace to SVG? [Y/n] "
 )
 if "%~1"=="" (
   if not defined WHAT ( echo Nothing given. & pause & exit /b 1 )
   set ARGS=--thing "%WHAT%"
-  if /i "%VEC%"=="y" set ARGS=--thing "%WHAT%" --cutout --vectorize
+  if /i not "%VEC%"=="n" set ARGS=--thing "%WHAT%" --vectorize
 )
 
 curl.exe -s -o nul http://127.0.0.1:8188/ || (
