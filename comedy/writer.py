@@ -18,30 +18,21 @@ SFX = ["explosion", "big_explosion", "launch", "whoosh", "pop", "boing", "rimsho
 BACKGROUNDS = ["plain", "room", "city", "field", "night"]
 
 EXAMPLE = """{
-  "title": "Short funny title",
+  "title": "<short funny title about the topic>",
   "cast": [
-    {"name": "Trump", "who": "Donald Trump", "gender": "male"},
-    {"name": "Zelensky", "who": "Volodymyr Zelensky", "gender": "male"}
+    {"name": "<short name>", "who": "<full real name>", "gender": "male|female"}
   ],
   "scenes": [
     {
-      "background": "room",
-      "label": "",
-      "stage": ["Zelensky", "Trump"],
+      "background": "<background>",
+      "label": "<optional CAPS word or empty>",
+      "stage": ["<name or thing>", "<name or thing>"],
       "beats": [
-        {"who": "Trump", "say": "Folks, I have a beautiful plan.", "face": "smug", "shot": "medium"},
-        {"who": "Zelensky", "say": "Is it the same plan as last week?", "face": "neutral", "shot": "close"},
-        {"pause": 1.5, "who": "Trump", "face": "shocked"},
-        {"who": "Trump", "say": "It has a new cover!", "face": "laughing", "do": "shrug", "shot": "close"}
-      ]
-    },
-    {
-      "background": "map of the Black Sea",
-      "label": "RUSSIA",
-      "stage": ["oil refinery"],
-      "beats": [
-        {"thing": "Shahed drone", "event": "hit", "target": "oil refinery", "shot": "wide"},
-        {"who": "Putin", "do": "enter_right", "say": "Just a small smoking accident.", "face": "crying"}
+        {"who": "<name>", "say": "<line>", "face": "<face>", "shot": "<shot>"},
+        {"who": "<name>", "say": "<line>", "face": "<face>", "do": "<action>", "react": {"<other name>": "<face>"}},
+        {"pause": 1.5, "who": "<name>", "face": "<face>"},
+        {"thing": "<thing>", "event": "<event>", "target": "<thing or name, only for hit>"},
+        {"who": "<name>", "do": "<action>", "sfx": "<sfx>"}
       ]
     }
   ]
@@ -59,12 +50,17 @@ Length: about {seconds} seconds, roughly {words} spoken words in total, 1-3 scen
 {cast_hint}
 Drawings that already exist (prefer these names): {known}
 
-Reply with JSON only, exactly this structure:
+Reply with JSON only, in this structure (a template - replace every <...> with your own sketch about
+the topic, use as many scenes and beats as the sketch needs):
 {example}
 
+Example of the tone (don't reuse it): Trump: "Folks, I have a beautiful peace plan." / Zelensky: "Is it the
+same plan as last week?" / 1.5 s silent close-up of Trump / Trump: "It has a new cover!" (shrug, rimshot)
+
 Rules:
-- cast: every character that speaks or appears; "name" short (used in the beats), "who" the full real
-  name (used to draw the caricature), "gender" male or female
+- cast: every character that speaks or appears - real public figures, a country is played by its
+  leader; "name" short (used in the beats), "who" the full real name (used to draw the caricature),
+  "gender" male or female
 - scene "background": one of {backgrounds}, "map of <region>" or a short place ("the Kremlin throne
   room", "the Oval Office"); "label": optional short CAPS word shown on it (a country name on a map)
 - scene "stage": left-to-right list of the characters AND things (objects/buildings, e.g. "oil refinery")
@@ -91,7 +87,7 @@ def write(topic, lang, seconds, cast, known, llm):
     prompt = PROMPT.format(topic=topic, lang=lang, seconds=seconds, words=words, beats=beats, cast_hint=cast_hint,
                            known=", ".join(known) or "none", example=EXAMPLE, backgrounds=", ".join(BACKGROUNDS),
                            faces=", ".join(FACES), actions=", ".join(ACTIONS), sfx=", ".join(SFX))
-    return llm.text_json(prompt, temperature=0.9)
+    return llm.text_json(prompt, temperature=0.9, ollama_options={"num_predict": 3000, "num_ctx": 8192})
 
 
 # ---------------------------------------------------------------- normalize
@@ -120,8 +116,9 @@ def normalize(script):
         k = _key(name)
         if not k:
             return None
-        for m in cast:  # "Donald Trump" and "Trump" are the same person
-            if k in (_key(m["name"]), _key(m["who"])) or k.split()[-1] == _key(m["name"]).split()[-1]:
+        for m in cast:  # "Donald Trump", "Trump" and "Tru,mp" are the same person
+            keys = (_key(m["name"]), _key(m["who"]))
+            if k in keys or k.replace(" ", "") in (x.replace(" ", "") for x in keys)                     or k.split()[-1] == keys[0].split()[-1]:
                 by_key[k] = m
                 return m
         m = {"name": name, "who": str(who or name).strip(), "gender": "female" if str(gender).lower().startswith("f") else "male"}
@@ -158,6 +155,9 @@ def normalize(script):
         for b in sc.get("beats") or []:
             if not isinstance(b, dict):
                 continue
+            if b.get("thing") and b.get("event") and is_char(b["thing"]) and _pick(b["event"], EVENTS) != "hit":
+                # people never explode or vanish: they get a scare instead
+                b = {"who": b["thing"], "do": "tremble", "face": "shocked", "sfx": b.get("sfx") or "explosion"}
             nb = {}
             if b.get("who"):
                 nb["who"] = char(b["who"])
