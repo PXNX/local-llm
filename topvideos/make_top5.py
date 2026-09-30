@@ -6,8 +6,9 @@ pre-ranks them by engagement (views + reactions relative to the channel's usual 
 downloads the best --max-candidates -> qwen3-vl:4b (Ollama) looks at a 2x2 frame grid + the
 caption of each and scores "funny" and "cute" 0-10, names the subject and writes a short title ->
 the topic (--topic, or auto: the one with the stronger top 5) decides, the 5 best clips that fit
-it are ranked (AI score + engagement bonus) -> ffmpeg renders intro card, then #5 ... #1, each as
-a title card + the clip (blurred fill background, rank badge, loudness normalized) -> one MP4.
+it are ranked (AI score + engagement bonus) -> ffmpeg renders #5 ... #1, each as
+a title card + the clip (blurred fill background, rank badge, loudness normalized), an animated
+subscribe prompt half-way through -> one MP4 that loops seamlessly as a Short (#1 flows into #5).
 
 Telegram login: create an app at https://my.telegram.org -> API development tools, put api_id
 and api_hash (and the two-step verification password, if any) into the repo's .env (see
@@ -23,7 +24,9 @@ import base64
 import datetime as dt
 import io
 import json
+import math
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -32,7 +35,7 @@ from pathlib import Path
 
 import av
 import imageio_ffmpeg
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 HERE = Path(__file__).resolve().parent
 ENV_FILE = HERE.parent / ".env"
@@ -357,8 +360,8 @@ def centered(draw, lines, f, y, W, fill, stroke=6, stroke_fill="black"):
     return y
 
 
-def card(path, W, H, big, sub, color, bg_img=None):
-    """Title card: blurred frame (or gradient) background, huge headline, subtitle."""
+def card(path, W, H, big, sub, color, bg_img=None, top=None):
+    """Title card: blurred frame (or gradient) background, huge headline, subtitle, optional small top line."""
     if bg_img is not None:
         bg = bg_img.convert("RGB")
         s = max(W / bg.width, H / bg.height)
@@ -379,22 +382,212 @@ def card(path, W, H, big, sub, color, bg_img=None):
     total = len(big_lines) * f_big.size * 1.12 + 30 + len(sub_lines) * f_sub.size * 1.12
     y = centered(d, big_lines, f_big, int((H - total) / 2), W, color, stroke=max(4, unit // 90))
     centered(d, sub_lines, f_sub, y + 30, W, "white", stroke=max(3, unit // 160))
+    if top:
+        f_top, top_lines = fit_lines(d, top.upper(), "impact.ttf", W * 0.86, int(unit * 0.085))
+        centered(d, top_lines, f_top, int(H * 0.07), W, "#FFD400", stroke=max(3, unit // 160))
     bg.save(path)
 
 
-def badge(path, W, H, rank, title):
-    """Transparent overlay for the clip: rank circle top-left, title bar at the bottom."""
-    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+def rgb(c):
+    return ImageColor.getrgb(c)
+
+
+def ease_back(k):
+    k = min(1.0, max(0.0, k)) - 1
+    return 1 + 2.70158 * k ** 3 + 1.70158 * k ** 2
+
+
+def fancy_text(text, f, top="#FFFFFF", bottom="#FFD400", stroke=8, shadow=10):
+    """Text with a vertical gradient fill, thick black outline and a soft drop shadow (RGBA image)."""
+    probe_d = ImageDraw.Draw(Image.new("L", (1, 1)))
+    l, t, r, b = probe_d.textbbox((0, 0), text, font=f, stroke_width=stroke)
+    w, h = r - l + shadow * 2, b - t + shadow * 2
+    pos = (-l + shadow // 2, -t + shadow // 2)
+    fill_m, line_m = Image.new("L", (w, h)), Image.new("L", (w, h))
+    ImageDraw.Draw(fill_m).text(pos, text, font=f, fill=255)
+    ImageDraw.Draw(line_m).text(pos, text, font=f, fill=255, stroke_width=stroke, stroke_fill=255)
+    grad = Image.new("RGB", (w, h))
+    c1, c2 = rgb(top), rgb(bottom)
+    gd = ImageDraw.Draw(grad)
+    for y in range(h):
+        k = y / max(1, h - 1)
+        gd.line([(0, y), (w, y)], fill=tuple(int(c1[i] + (c2[i] - c1[i]) * k) for i in range(3)))
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    sh = Image.new("L", (w, h))
+    sh.paste(line_m.crop((0, 0, w - shadow // 2, h - shadow // 2)), (shadow // 2, shadow // 2))
+    out.paste((0, 0, 0, 255), (0, 0), sh.filter(ImageFilter.GaussianBlur(shadow / 2)).point(lambda a: int(a * 0.6)))
+    out.paste((0, 0, 0, 255), (0, 0), line_m)
+    out.paste(grad, (0, 0), fill_m)
+    return out
+
+
+def emoji(char, size):
+    """Colour emoji (Segoe UI Emoji) as RGBA, or None if the font can't draw it."""
+    try:
+        f = ImageFont.truetype(str(FONTS / "seguiemj.ttf"), 109)
+        im = Image.new("RGBA", (160, 160), (0, 0, 0, 0))
+        ImageDraw.Draw(im).text((10, 10), char, font=f, embedded_color=True)
+        box = im.getbbox()
+        return im.crop(box).resize((size, size), Image.LANCZOS) if box else None
+    except Exception:
+        return None
+
+
+def paste_center(canvas, im, cx, cy, scale=1.0, angle=0.0, alpha=1.0):
+    if scale != 1.0:
+        im = im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))), Image.BICUBIC)
+    if angle:
+        im = im.rotate(angle, resample=Image.BICUBIC, expand=True)
+    if alpha < 1.0:
+        im = im.copy()
+        im.putalpha(im.getchannel("A").point(lambda a: int(a * alpha)))
+    canvas.alpha_composite(im, (int(cx - im.width / 2), int(cy - im.height / 2)))
+
+
+def polaroid(img, max_w, max_h, angle):
+    """Photo in a white frame with a soft shadow, slightly tilted."""
+    img = img.convert("RGB")
+    s = min(max_w / img.width, max_h / img.height)
+    img = img.resize((max(1, int(img.width * s)), max(1, int(img.height * s))), Image.LANCZOS)
+    m = max(6, int(min(img.size) * 0.04))
+    fr = Image.new("RGBA", (img.width + 2 * m, img.height + 3 * m), "white")
+    fr.paste(img, (m, m))
+    pad = m * 3
+    out = Image.new("RGBA", (fr.width + 2 * pad, fr.height + 2 * pad), (0, 0, 0, 0))
+    sh = Image.new("L", out.size)
+    ImageDraw.Draw(sh).rectangle((pad + m, pad + m, pad + fr.width + m, pad + fr.height + m), fill=150)
+    out.paste((0, 0, 0, 255), (0, 0), sh.filter(ImageFilter.GaussianBlur(m)))
+    out.alpha_composite(fr, (pad, pad))
+    return out.rotate(angle, resample=Image.BICUBIC, expand=True)
+
+
+def backdrop(W, H, color, still=None, dark=0.55):
+    """Colourful background: rank-colour glow over a deep gradient, optionally a hint of the blurred clip."""
+    c = rgb(color)
+    top, bottom = tuple(int(v * 0.35) for v in c), (18, 8, 40)
+    bg = Image.new("RGB", (W, H))
+    d = ImageDraw.Draw(bg)
+    for y in range(H):
+        k = y / H
+        d.line([(0, y), (W, y)], fill=tuple(int(top[i] + (bottom[i] - top[i]) * k) for i in range(3)))
+    if still is not None:
+        s = still.convert("RGB")
+        sc = max(W / s.width, H / s.height)
+        s = s.resize((int(s.width * sc) + 1, int(s.height * sc) + 1))
+        s = s.crop(((s.width - W) // 2, (s.height - H) // 2, (s.width - W) // 2 + W, (s.height - H) // 2 + H))
+        bg = Image.blend(bg, s.filter(ImageFilter.GaussianBlur(30)), 1 - dark)
+    size = int(max(W, H) * 1.1)
+    glow = Image.radial_gradient("L").resize((size, size)).point(lambda a: int(max(0, 255 - a * 1.4) * 0.8))
+    bg.paste(Image.new("RGB", glow.size, c), ((W - size) // 2, int(H * 0.40) - size // 2), glow)
+    return bg.convert("RGBA")
+
+
+def rays(canvas, cx, cy, angle, color=(255, 255, 255), alpha=34, n=16):
+    """Sunburst rays over a copy of the canvas, turned by `angle` degrees."""
+    over = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(over)
+    R = max(canvas.size) * 1.5
+    for i in range(n):
+        a0 = math.radians(angle) + 2 * math.pi * i / n
+        a1 = a0 + math.pi / n
+        d.polygon([(cx, cy), (cx + R * math.cos(a0), cy + R * math.sin(a0)),
+                   (cx + R * math.cos(a1), cy + R * math.sin(a1))], fill=(*color, alpha))
+    out = canvas.copy()
+    out.alpha_composite(over)
+    return out
+
+
+def ribbon(text, f, fill="#FFD400", fg="black", angle=-3):
+    d0 = ImageDraw.Draw(Image.new("L", (1, 1)))
+    l, t, r, b = d0.textbbox((0, 0), text, font=f)
+    px, py = int(f.size * 0.45), int(f.size * 0.22)
+    im = Image.new("RGBA", (r - l + 2 * px, b - t + 2 * py), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
+    d.rounded_rectangle((0, 0, im.width - 1, im.height - 1), radius=im.height // 4, fill=fill,
+                        outline="black", width=max(3, f.size // 14))
+    d.text((px - l, py - t), text, font=f, fill=fg)
+    return im.rotate(angle, resample=Image.BICUBIC, expand=True) if angle else im
+
+
+def starburst(r, color, points=14):
+    im = Image.new("RGBA", (2 * r + 8, 2 * r + 8), (0, 0, 0, 0))
+    c = r + 4
+    pts = []
+    for i in range(points * 2):
+        a = math.pi * i / points - math.pi / 2
+        rr = r if i % 2 == 0 else r * 0.80
+        pts.append((c + rr * math.cos(a), c + rr * math.sin(a)))
+    ImageDraw.Draw(im).polygon(pts, fill=color, outline="black", width=max(3, r // 18))
+    return im
+
+
+def fit_width(im, max_w):
+    return im.resize((int(max_w), int(im.height * max_w / im.width)), Image.LANCZOS) if im.width > max_w else im
+
+
+def card_frames(folder, W, H, rank, title, color, still, headline, seconds):
+    """Animated rank card as a PNG sequence: rotating sunburst, #N pops in, the clip's still as a tilted
+    polaroid, title pill slides up, the headline as a ribbon at the top (same on every card -> loops)."""
+    folder.mkdir(exist_ok=True)
     unit = min(W, H)
-    r = int(unit * 0.09)
-    cx, cy = int(unit * 0.04) + r, int(unit * 0.04) + r
-    d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=RANK_COLORS[rank], outline="black", width=max(3, unit // 150))
-    f = font(int(r * 1.2))
-    t = f"#{rank}"
-    tw = d.textlength(t, font=f)
-    d.text((cx - tw / 2, cy - f.size * 0.62), t, font=f, fill="black")
+    vertical = H > W
+    base = backdrop(W, H, color, still)
+    num = fancy_text(f"#{rank}", font(int(unit * 0.34)), "#FFFFFF", color, stroke=max(6, unit // 70))
+    pol = polaroid(still, W * (0.70 if vertical else 0.42), H * (0.36 if vertical else 0.62),
+                   -4 if rank % 2 else 4) if still is not None else None
+    d0 = ImageDraw.Draw(Image.new("L", (1, 1)))
+    f_t, lines = fit_lines(d0, title, "ariblk.ttf", W * (0.80 if vertical else 0.42), int(unit * 0.07), 24)
+    pill = Image.new("RGBA", (int(W * (0.88 if vertical else 0.48)), int(len(lines) * f_t.size * 1.15 + unit * 0.05)),
+                     (0, 0, 0, 0))
+    pd = ImageDraw.Draw(pill)
+    pd.rounded_rectangle((0, 0, pill.width - 1, pill.height - 1), radius=unit // 30, fill=(0, 0, 0, 170),
+                         outline=color, width=max(3, unit // 150))
+    centered(pd, lines, f_t, int(unit * 0.025), pill.width, "white", stroke=0)
+    rib = fit_width(ribbon(headline.upper(), font(int(unit * 0.07))), W * 0.94) if headline else None
+    if vertical:
+        num_c, pol_c, pill_c = (W / 2, H * 0.25), (W / 2, H * 0.58), (W / 2, H * 0.86)
+    else:
+        num_c, pol_c, pill_c = (W * 0.26, H * 0.46), (W * 0.70, H * 0.50), (W * 0.26, H * 0.80)
+    for i in range(int(round(seconds * FPS))):
+        t = i / FPS
+        fr = rays(base, *num_c, angle=t * 25)
+        if pol is not None:
+            k = ease_back(t / 0.45)
+            paste_center(fr, pol, pol_c[0], pol_c[1] + (1 - min(1, t / 0.35)) * H * 0.08, scale=0.85 + 0.15 * k)
+        k = ease_back(t / 0.35)
+        pulse = 1 + 0.03 * math.sin(max(0.0, t - 0.35) * 8)
+        paste_center(fr, num, *num_c, scale=max(0.05, (0.2 + 0.8 * k) * pulse), angle=6 * (1 - min(1, t / 0.35)))
+        a = min(1.0, max(0.0, (t - 0.15) / 0.25))
+        if a > 0:
+            paste_center(fr, pill, pill_c[0], pill_c[1] + (1 - a) * unit * 0.08, alpha=a)
+        if rib is not None:
+            paste_center(fr, rib, W / 2, H * (0.075 if vertical else 0.09))
+        fr.convert("RGB").save(folder / f"f_{i:03d}.png", compress_level=1)
+    return folder / "f_%03d.png"
+
+
+def badge(path, W, H, rank, title, headline=None):
+    """Transparent overlay for the clip: rank starburst top-left, headline ribbon next to it,
+    soft rank-colour edges, optional title bar at the bottom."""
+    im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    unit = min(W, H)
+    c = rgb(RANK_COLORS[rank])
+    edge = int(H * 0.10)
+    gd = ImageDraw.Draw(im)
+    for y in range(edge):
+        a = int(110 * (1 - y / edge) ** 2)
+        gd.line([(0, y), (W, y)], fill=(*c, a))
+        gd.line([(0, H - 1 - y), (W, H - 1 - y)], fill=(*c, a))
+    r = int(unit * 0.10)
+    cx, cy = int(unit * 0.035) + r, int(unit * 0.035) + r
+    paste_center(im, starburst(r, RANK_COLORS[rank]), cx, cy, angle=-8)
+    paste_center(im, fancy_text(f"#{rank}", font(int(r * 1.05)), "#FFFFFF", "#FFFFFF",
+                                stroke=max(3, unit // 150), shadow=4), cx, cy, angle=-8)
+    if headline:
+        rib = fit_width(ribbon(headline.upper(), font(int(unit * 0.042)), angle=0), W - (cx + r) - unit * 0.06)
+        paste_center(im, rib, cx + r + unit * 0.02 + rib.width / 2, cy)
     if title:
+        d = ImageDraw.Draw(im)
         f2, lines = fit_lines(d, title, "ariblk.ttf", W * 0.88, int(unit * 0.06), 22)
         bar_h = int(len(lines) * f2.size * 1.12 + unit * 0.04)
         y0 = H - bar_h - int(H * 0.06)
@@ -403,7 +596,132 @@ def badge(path, W, H, rank, title):
     im.save(path)
 
 
+def thumbnail(path, W, H, top, word, topic):
+    """Cover image: #1 big as a polaroid, #2/#3 behind it, "TOP 5 <word>" in big gradient letters + emoji."""
+    unit = min(W, H)
+    v = H > W
+    col = "#FF9F1C" if topic == "funny" else "#FF6FB5"
+    im = rays(backdrop(W, H, col), W / 2, H * 0.55, 0, alpha=45, n=20)
+    by_rank = {c["rank"]: c for c in top}
+    pw, ph = (W * 0.46, H * 0.25) if v else (W * 0.26, H * 0.46)
+    side = ((3, W * 0.24, H * 0.38, 11), (2, W * 0.76, H * 0.38, -11)) if v else \
+        ((3, W * 0.14, H * 0.60, 10), (2, W * 0.86, H * 0.60, -10))
+    for r, x, y, a in side:
+        if by_rank.get(r, {}).get("still") is not None:
+            paste_center(im, polaroid(by_rank[r]["still"], pw, ph, a), x, y)
+    if by_rank.get(1, {}).get("still") is not None:
+        paste_center(im, polaroid(by_rank[1]["still"], W * (0.74 if v else 0.42), H * (0.40 if v else 0.60), -3),
+                     W / 2, H * (0.60 if v else 0.58))
+        sx, sy = W * (0.80 if v else 0.68), H * (0.43 if v else 0.30)
+        paste_center(im, starburst(int(unit * 0.11), RANK_COLORS[1]), sx, sy, angle=-8)
+        paste_center(im, fancy_text("#1", font(int(unit * 0.12)), "#FFFFFF", "#FFFFFF", stroke=4, shadow=4),
+                     sx, sy, angle=-8)
+    t1 = fit_width(fancy_text(f"TOP {len(top)}", font(int(unit * (0.30 if v else 0.20))), "#FFFFFF", "#FFD400",
+                              stroke=max(8, unit // 55), shadow=14), W * 0.94)
+    t2 = fit_width(fancy_text(word.upper(), font(int(unit * (0.19 if v else 0.15))), "#FFF3B0",
+                              "#FF3B3B" if topic == "funny" else "#FF4FA3", stroke=max(8, unit // 60), shadow=14),
+                   W * 0.94)
+    paste_center(im, t1, W / 2, H * (0.10 if v else 0.14), angle=-3)
+    paste_center(im, t2, W / 2, H * (0.21 if v else 0.31), angle=-3)
+    paste_center(im, ribbon("VIDEOS OF TODAY", font(int(unit * 0.075)), angle=2), W / 2, H * 0.88)
+    e = emoji("\U0001F602" if topic == "funny" else "\U0001F63B", int(unit * 0.22))
+    if e is not None:
+        paste_center(im, e, W * 0.14, H * (0.80 if v else 0.80), angle=12)
+        paste_center(im, e, W * 0.86, H * (0.80 if v else 0.80), angle=-12)
+    im.convert("RGB").save(path, quality=92)
+
+
+SUB_SECONDS = 3.6
+
+
+def subscribe_frames(folder, W, H, text="Please subscribe for more!"):
+    """PNG sequence (sub_000.png ...) of an animated call-to-action: text + red SUBSCRIBE button pop in,
+    the button pulses, a cursor clicks it -> grey SUBSCRIBED + wiggling bell, then everything pops out."""
+    folder.mkdir(exist_ok=True)
+    unit = min(W, H)
+    f_txt, lines = fit_lines(ImageDraw.Draw(Image.new("RGB", (1, 1))), text, "impact.ttf", W * 0.84, int(unit * 0.10))
+    f_btn = font(int(unit * 0.065), "ariblk.ttf")
+    click = 1.7
+
+    def panel(subscribed, press, bell_angle):
+        pw, ph = int(W * 0.9), int(len(lines) * f_txt.size * 1.12 + unit * 0.24)
+        im = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        y = centered(d, lines, f_txt, 0, pw, "white", stroke=max(4, unit // 110))
+        label = "SUBSCRIBED" if subscribed else "SUBSCRIBE"
+        bw, bh = int(d.textlength(label, font=f_btn) + unit * 0.24), int(unit * 0.13)
+        bw, bh = int(bw * press), int(bh * press)
+        bx, by = (pw - bw) // 2, y + int(unit * 0.04) + (int(unit * 0.13) - bh) // 2
+        d.rounded_rectangle((bx, by, bx + bw, by + bh), radius=bh // 2,
+                            fill="#5A5A5A" if subscribed else "#FF0000", outline="white", width=max(3, unit // 180))
+        lw = d.textlength(label, font=f_btn)
+        tx = bx + (bw - lw) / 2 - (unit * 0.04 if subscribed else 0)
+        d.text((tx, by + (bh - f_btn.size) / 2 - f_btn.size * 0.12), label, font=f_btn, fill="white")
+        if subscribed:  # bell next to the label
+            s = int(bh * 0.5)
+            bell = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+            b = ImageDraw.Draw(bell)
+            b.pieslice((s * 0.15, s * 0.05, s * 0.85, s * 0.95), 180, 360, fill="white")
+            b.rectangle((s * 0.15, s * 0.5, s * 0.85, s * 0.75), fill="white")
+            b.rectangle((s * 0.05, s * 0.72, s * 0.95, s * 0.8), fill="white")
+            b.ellipse((s * 0.4, s * 0.8, s * 0.6, s), fill="white")
+            bell = bell.rotate(bell_angle, resample=Image.BICUBIC)
+            im.alpha_composite(bell, (int(tx + lw + unit * 0.02), by + (bh - s) // 2))
+        return im, (bx + bw // 2, by + bh // 2)
+
+    def cursor(size):
+        c = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        pts = [(0, 0), (0, 0.78), (0.2, 0.6), (0.34, 0.92), (0.48, 0.86), (0.34, 0.55), (0.58, 0.55)]
+        ImageDraw.Draw(c).polygon([(x * size * 0.95 + 2, y * size * 0.95 + 2) for x, y in pts],
+                                  fill="white", outline="black", width=max(2, size // 20))
+        return c
+
+    cur = cursor(int(unit * 0.12))
+    n = int(SUB_SECONDS * FPS)
+    for i in range(n):
+        t = i / FPS
+        if t < 0.45:  # pop in, ease-out-back
+            k = t / 0.45
+            scale, alpha = 0.3 + 0.7 * (1 + 2.7 * (k - 1) ** 3 + 1.7 * (k - 1) ** 2), k
+        elif t > SUB_SECONDS - 0.35:  # pop out
+            k = (SUB_SECONDS - t) / 0.35
+            scale, alpha = 0.6 + 0.4 * k, k
+        else:
+            scale, alpha = 1.0, 1.0
+        subscribed = t >= click
+        press = 0.9 if click - 0.08 <= t < click + 0.08 else (1 + 0.04 * math.sin(t * 9) if not subscribed else 1.0)
+        bell = 18 * math.sin((t - click) * 22) * max(0.0, 1 - (t - click) / 1.0) if subscribed else 0
+        p, (bcx, bcy) = panel(subscribed, press, bell)
+        # fixed-size canvas (room for the cursor below), so the panel never jumps
+        im = Image.new("RGBA", (p.width, p.height + int(unit * 0.25)), (0, 0, 0, 0))
+        im.alpha_composite(p)
+        if 0.8 <= t < click + 0.6:  # cursor glides onto the button, then rests there
+            k = min(1.0, (t - 0.8) / (click - 0.8 - 0.1))
+            k = 1 - (1 - k) ** 3
+            x0, y0 = p.width * 0.95, im.height - cur.height
+            im.alpha_composite(cur, (int(x0 + (bcx + unit * 0.02 - x0) * k), int(y0 + (bcy - y0) * k)))
+        if scale != 1.0:
+            im = im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))), Image.BICUBIC)
+        if alpha < 1.0:
+            im.putalpha(im.getchannel("A").point(lambda a: int(a * alpha)))
+        frame = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        cy = int(H * 0.70)
+        frame.alpha_composite(im, ((W - im.width) // 2, cy - im.height // 2))
+        frame.save(folder / f"sub_{i:03d}.png", compress_level=1)
+    return folder / "sub_%03d.png"
+
+
 # ---------------------------------------------------------------- 4. video
+def still_at(path, t):
+    """A frame from about t seconds in (the first frame is often black or a title)."""
+    with av.open(str(path)) as con:
+        s = con.streams.video[0]
+        if t > 0.5:
+            con.seek(int(t / s.time_base), stream=s)
+        for fr in con.decode(s):
+            return fr.to_image()
+
+
 def ffmpeg(args):
     cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y", *args]
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -421,34 +739,48 @@ AENC = ["-c:a", "aac", "-b:a", "160k", "-ar", "44100", "-ac", "2"]
 
 
 def render_card(png, seconds, out, args):
-    ffmpeg(["-loop", "1", "-framerate", str(FPS), "-t", f"{seconds}", "-i", str(png),
-            "-f", "lavfi", "-t", f"{seconds}", "-i", "anullsrc=r=44100:cl=stereo",
+    """Still image or PNG sequence (pattern with %03d) -> clip with fades and silent audio."""
+    src = ["-framerate", str(FPS), "-i", str(png)] if "%" in str(png) else \
+        ["-loop", "1", "-framerate", str(FPS), "-t", f"{seconds}", "-i", str(png)]
+    ffmpeg([*src, "-f", "lavfi", "-t", f"{seconds}", "-i", "anullsrc=r=44100:cl=stereo",
             "-vf", f"fade=in:0:{FPS // 3},fade=out:st={seconds - 0.3}:d=0.3,format=yuv420p",
             *venc(args), *AENC, "-r", str(FPS), "-shortest", str(out)])
 
 
-def render_clip(src, overlay_png, start, length, has_audio, W, H, out, args):
+def render_clip(src, overlay_png, start, length, has_audio, W, H, out, args, extra=None):
+    """extra: (png sequence pattern, seconds into the clip) of an animated overlay, e.g. the subscribe prompt."""
     fo = max(0.0, length - 0.35)
     vf = (f"[0:v]split[a][b];"
-          f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=25:3,eq=brightness=-0.12[bg];"
-          f"[b]scale={W}:{H}:force_original_aspect_ratio=decrease[fg];"
+          f"[a]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=25:3,"
+          f"eq=brightness=-0.05:saturation=1.6[bg];"
+          f"[b]scale={W - 16}:{H - 16}:force_original_aspect_ratio=decrease,pad=iw+12:ih+12:6:6:white[fg];"
           f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,fps={FPS}[v0];"
-          f"[v0][1:v]overlay=0:0,fade=in:0:6,fade=out:st={fo}:d=0.35,format=yuv420p[v]")
+          f"[v0][1:v]overlay=0:0[v1];")
     inputs = ["-ss", f"{start}", "-t", f"{length}", "-i", str(src), "-i", str(overlay_png)]
+    if extra:
+        pattern, at = extra
+        inputs += ["-framerate", str(FPS), "-i", str(pattern)]
+        vf += (f"[2:v]format=rgba,setpts=PTS+{at:.3f}/TB[s];"
+               f"[v1][s]overlay=0:0:eof_action=pass[v2];")
+        last = "[v2]"
+    else:
+        last = "[v1]"
+    vf += f"{last}fade=in:0:6,fade=out:st={fo}:d=0.35,format=yuv420p[v]"
     if has_audio:
         af = (f"[0:a]aresample=44100,aformat=channel_layouts=stereo,loudnorm=I=-16:TP=-1.5:LRA=11,"
               f"afade=in:d=0.2,afade=out:st={fo}:d=0.35[a]")
     else:
         inputs += ["-f", "lavfi", "-t", f"{length}", "-i", "anullsrc=r=44100:cl=stereo"]
-        af = "[2:a]anull[a]"
+        af = f"[{3 if extra else 2}:a]anull[a]"
     ffmpeg([*inputs, "-filter_complex", vf + ";" + af, "-map", "[v]", "-map", "[a]",
             *venc(args), *AENC, "-r", str(FPS), "-t", f"{length}", str(out)])
 
 
-def concat(parts, out):
+def concat(parts, out, cover=None):
     lst = out.with_suffix(".txt")
     lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts), encoding="utf-8")
-    ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", "-movflags", "+faststart", str(out)])
+    cov = ["-i", str(cover), "-map", "0", "-map", "1", "-disposition:v:1", "attached_pic"] if cover else []
+    ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), *cov, "-c", "copy", "-movflags", "+faststart", str(out)])
     lst.unlink()
 
 
@@ -495,6 +827,10 @@ async def run(args):
             sys.exit("No videos found in that time window.")
 
         cands.sort(key=lambda c: -c["eng"])
+        if args.cached_only:
+            rated = {k.split("|")[0] for k, v in cache.items() if k.endswith(f"|{args.subject or ''}|{args.lang}")}
+            cands = [c for c in cands if c["key"] in rated and (DL_DIR / f"{c['key']}.mp4").exists()]
+            print(f"[info ] --cached-only: {len(cands)} clip(s) already downloaded and rated")
         cands = cands[:args.max_candidates]
         print(f"[dl   ] downloading {len(cands)} candidate(s) ...")
         for c in cands:
@@ -544,36 +880,55 @@ async def run(args):
     work = OUT_DIR / f"_work_{topic}_{stamp}"
     work.mkdir(exist_ok=True)
     headline = args.headline or f"Top {n} {word} Videos of Today"
+    order = sorted(top, key=lambda c: -c["rank"])  # countdown: #5 first
+    for c in order:
+        c["len"] = min(args.clip_seconds, c["file_dur"] or c["duration"])
+
+    # subscribe prompt in the middle: the clip closest to the half-way mark that is long enough for it
+    t, spans = (args.intro_seconds if args.intro else 0.0), []
+    for c in order:
+        t += args.card_seconds
+        spans.append((c, t))
+        t += c["len"]
+    sub = {}
+    if not args.no_subscribe:
+        for c, s0 in sorted(spans, key=lambda x: abs(x[1] + x[0]["len"] / 2 - t / 2)):
+            if c["len"] >= SUB_SECONDS + 0.6:
+                at = min(max(t / 2 - s0, 0.3), c["len"] - SUB_SECONDS - 0.3)
+                sub[c["rank"]] = (subscribe_frames(work / "subscribe", W, H, args.subscribe_text), at)
+                print(f"[video] subscribe prompt at {s0 + at:.1f}s of {t:.1f}s (in #{c['rank']})")
+                break
+
+    # No separate intro by default: the headline sits on top of every rank card, so when a Short loops,
+    # #1 flows into #5 exactly like #2 flows into #1 and viewers don't notice the restart.
     parts = []
-    card(work / "intro.png", W, H, headline, f"{now:%d.%m.%Y}", "#FFD400")
-    render_card(work / "intro.png", args.intro_seconds, work / "00_intro.mp4", args)
-    parts.append(work / "00_intro.mp4")
-    for c in sorted(top, key=lambda c: -c["rank"]):  # countdown: #5 first
+    if args.intro:
+        card(work / "intro.png", W, H, headline, f"{now:%d.%m.%Y}", "#FFD400")
+        render_card(work / "intro.png", args.intro_seconds, work / "00_intro.mp4", args)
+        parts.append(work / "00_intro.mp4")
+    for c in order:
         r = c["rank"]
         title = c["ai"]["title"] or c["ai"]["subject"]
-        length = min(args.clip_seconds, c["file_dur"] or c["duration"])
-        with av.open(str(c["path"])) as con:
-            s = con.streams.video[0]
-            fr = next(con.decode(s))
-            still = fr.to_image()
-        card(work / f"card_{r}.png", W, H, f"#{r}", title, RANK_COLORS[r], still)
-        badge(work / f"badge_{r}.png", W, H, r, "" if args.no_title_bar else title)
-        print(f"[video] #{r}: {length:.1f}s")
-        render_card(work / f"card_{r}.png", args.card_seconds, work / f"{10 - r:02d}a_card.mp4", args)
-        render_clip(c["path"], work / f"badge_{r}.png", 0.0, length, c["has_audio"], W, H,
-                    work / f"{10 - r:02d}b_clip.mp4", args)
+        c["still"] = still_at(c["path"], c["len"] * 0.4)
+        card_src = card_frames(work / f"card_{r}", W, H, r, title, RANK_COLORS[r], c["still"],
+                               None if args.intro else headline, args.card_seconds)
+        badge(work / f"badge_{r}.png", W, H, r, title if args.title_bar else "", None if args.intro else headline)
+        print(f"[video] #{r}: {c['len']:.1f}s")
+        render_card(card_src, args.card_seconds, work / f"{10 - r:02d}a_card.mp4", args)
+        render_clip(c["path"], work / f"badge_{r}.png", 0.0, c["len"], c["has_audio"], W, H,
+                    work / f"{10 - r:02d}b_clip.mp4", args, extra=sub.get(r))
         parts += [work / f"{10 - r:02d}a_card.mp4", work / f"{10 - r:02d}b_clip.mp4"]
 
     out = OUT_DIR / f"top{n}_{topic}_{stamp}.mp4"
-    concat(parts, out)
+    thumb = out.with_name(out.stem + "_thumbnail.jpg")
+    thumbnail(thumb, W, H, top, word, topic)
+    concat(parts, out, thumb)
     credits = [f"#{c['rank']}: {c['channel']} (t.me/c/{c['chan_id']}/{c['msg_id']})" for c in top]
     out.with_suffix(".txt").write_text(f"{headline} - {stamp}\n\n" + "\n".join(credits) + "\n", encoding="utf-8")
     if not args.keep_work:
-        for p in work.iterdir():
-            p.unlink()
-        work.rmdir()
+        shutil.rmtree(work)
     print(f"[done ] {out}")
-    print(f"        sources/credits: {out.with_suffix('.txt').name}")
+    print(f"        thumbnail: {thumb.name}, sources/credits: {out.with_suffix('.txt').name}")
 
 
 def main():
@@ -593,14 +948,20 @@ def main():
     ap.add_argument("--max-mb", type=float, default=150, help="skip larger files (default 150 MB)")
     ap.add_argument("--clip-seconds", type=float, default=30, help="cut each clip to this length (default 30 s)")
     ap.add_argument("--card-seconds", type=float, default=2.0)
+    ap.add_argument("--intro", action="store_true",
+                    help="separate headline card at the start (default: headline on the rank cards, loops seamlessly)")
     ap.add_argument("--intro-seconds", type=float, default=3.0)
     ap.add_argument("--format", choices=["vertical", "landscape"], default="vertical",
                     help="vertical 720x1280 (Shorts/Reels/TikTok, default) or landscape 1280x720")
     ap.add_argument("--lang", default="English", help="language of the titles (default English)")
     ap.add_argument("--headline", help='own intro text, default "Top 5 Funniest/Cutest Videos of Today"')
-    ap.add_argument("--no-title-bar", action="store_true", help="only the rank badge on the clips")
+    ap.add_argument("--title-bar", action="store_true", help="also show the title as a bar on the clips")
+    ap.add_argument("--no-subscribe", action="store_true", help="no subscribe prompt in the middle")
+    ap.add_argument("--subscribe-text", default="Please subscribe for more!")
     ap.add_argument("--nvenc", action="store_true", help="encode on the GPU (needs NVIDIA driver >= 570)")
     ap.add_argument("--keep-work", action="store_true", help="keep the intermediate cards/clips")
+    ap.add_argument("--cached-only", action="store_true",
+                    help="only use clips that are already downloaded and rated (no new downloads, no VLM)")
     args = ap.parse_args()
     # channel names/captions contain emojis, which the Windows console codepage can't print
     sys.stdout.reconfigure(errors="replace")

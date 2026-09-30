@@ -123,7 +123,9 @@ dragged into ComfyUI); the 5B fp16 model is bigger than the 6 GB VRAM and gets o
 - `--hours 48` look back N hours instead of "since midnight" (with fewer than 5 videos today it widens to 24 h by itself)
 - `--channel @name` (repeatable) instead of `channels.txt`, `--max-candidates 25` clips downloaded + rated
 - `--clip-seconds 30` max length per clip, `--format landscape` 1280x720 instead of vertical 720x1280, `--lang German` titles
-- `--headline "My text"` own intro text, `--no-title-bar` only the rank badge, `--nvenc` GPU encoding (new driver needed)
+- `--headline "My text"` own headline, `--title-bar` also show the clip title as a bar on the clips, `--nvenc` GPU encoding (new driver needed)
+- `--intro` separate headline card at the start (default: none, so the Short loops seamlessly), `--no-subscribe` / `--subscribe-text "..."` the subscribe prompt
+- `--cached-only` only clips that are already downloaded and rated (quick re-render, no downloads, no VLM)
 
 Setup once: create an app at https://my.telegram.org (API development tools) and put `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`
 (plus `TELEGRAM_PASSWORD` if two-step verification is on) into `.env` in the repo root - not in git, the .bat
@@ -131,15 +133,19 @@ creates it from `.env.example` and opens Notepad. The first
 run shows a QR code: scan it in the Telegram app under Settings > Devices > Link Desktop Device
 (`--login code` for phone number + login code instead; that code arrives as a message in the "Telegram"
 chat of your app, rarely by SMS, and the script says where it was sent); the session is stored in `topvideos\telegram.session`
-(treat it like a password, it is in `.gitignore`). Numeric channel IDs only resolve for channels your account has joined.
+(treat it like a password, it is in `.gitignore`). Numeric channel IDs only resolve for channels your account has joined;
+public channels also work as `@username` without joining (e.g. `@budyarchive`).
 
 Pipeline: Telethon reads today's posts, keeps videos of 3-180 s and drops reposts (same file or same
 duration+size) -> pre-ranks by engagement (views, reactions, forwards relative to the channel's median views)
 and downloads the top candidates to `topvideos\downloads\` -> `qwen3-vl:4b` sees a 2x2 grid of frames + the post
 caption and scores funny/cute 0-10, flags non-entertainment (news, ads, text slides) and writes a short title
 (cached in `topvideos\scores.json`) -> the 5 best clips of one topic are ranked by AI score + up to 2 points
-engagement bonus -> ffmpeg (bundled `imageio-ffmpeg`) renders intro, then per place a title card and the clip
-(blurred fill background, rank badge, loudness-normalized audio) and joins everything into one MP4.
+engagement bonus -> ffmpeg (bundled `imageio-ffmpeg`) renders per place an animated card (rotating sunburst, #N pop-in,
+the clip as a tilted photo, headline ribbon) and the clip (vivid blurred fill, white frame, rank starburst, headline
+ribbon, loudness-normalized audio), puts an animated "Please subscribe for more!" prompt half-way through and joins
+everything into one MP4 that loops seamlessly (#1 flows into #5 like any other place). A `_thumbnail.jpg` cover
+(also embedded in the MP4) and a credits `.txt` are written next to it.
 The clips belong to the channels/creators: check the rights before you publish the result.
 
 ### Sound effect options (`5-soundfx.bat [options]`)
