@@ -7,6 +7,7 @@ Configured in the repo's .env (real environment variables win):
   OPENROUTER_FALLBACKS up to 3 more models (comma separated), tried in order when one fails
   LLM_LOCAL_FALLBACK  1 (default): use the local Ollama model when all OpenRouter models fail
   OLLAMA_MODEL        local vision model, default qwen3-vl:4b
+  OLLAMA_TEXT_MODEL   local model for text-only prompts (text_json), default OLLAMA_MODEL
 """
 import base64
 import json
@@ -126,7 +127,16 @@ def _parse_json(text):
 
 def vision_json(prompt, jpeg, temperature=0.2, keep_alive=0, ollama_options=None):
     """Ask the vision model about one JPEG image, return its JSON reply as a dict."""
-    b64 = base64.b64encode(jpeg).decode()
+    return _ask(prompt, base64.b64encode(jpeg).decode(), temperature, keep_alive, ollama_options)
+
+
+def text_json(prompt, temperature=0.8, keep_alive=0, ollama_options=None):
+    """Text-only prompt (no image), return the JSON reply as a dict. Locally OLLAMA_TEXT_MODEL
+    (e.g. qwen3:8b) is used when set, else the vision model."""
+    return _ask(prompt, None, temperature, keep_alive, ollama_options)
+
+
+def _ask(prompt, b64, temperature, keep_alive, ollama_options):
     if provider() == "openrouter":
         errors = []
         if _ENV.get("OPENROUTER_API_KEY"):
@@ -139,14 +149,17 @@ def vision_json(prompt, jpeg, temperature=0.2, keep_alive=0, ollama_options=None
         if local_fallback() and _ollama_up():
             print(f"[llm  ] OpenRouter failed, using the local model {ollama_model()}")
             return _ollama(prompt, b64, temperature, keep_alive, ollama_options)
-        raise RuntimeError("all vision models failed: " + "; ".join(errors or ["OPENROUTER_API_KEY is not set"]))
+        raise RuntimeError("all LLM models failed: " + "; ".join(errors or ["OPENROUTER_API_KEY is not set"]))
     return _ollama(prompt, b64, temperature, keep_alive, ollama_options)
 
 
 def _ollama(prompt, b64, temperature, keep_alive, ollama_options):
+    msg = {"role": "user", "content": prompt}
+    if b64:
+        msg["images"] = [b64]
     payload = {
-        "model": ollama_model(),
-        "messages": [{"role": "user", "content": prompt, "images": [b64]}],
+        "model": ollama_model() if b64 else (_ENV.get("OLLAMA_TEXT_MODEL") or ollama_model()),
+        "messages": [msg],
         "format": "json",
         "stream": False,
         "think": False,
@@ -163,12 +176,12 @@ def _ollama(prompt, b64, temperature, keep_alive, ollama_options):
 
 def _openrouter(name, prompt, b64, temperature):
     key = _ENV.get("OPENROUTER_API_KEY")
+    content = [{"type": "text", "text": prompt}]
+    if b64:
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
     payload = {
         "model": name,
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        ]}],
+        "messages": [{"role": "user", "content": content}],
         "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
