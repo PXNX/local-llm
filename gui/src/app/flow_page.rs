@@ -83,7 +83,7 @@ impl App {
         ui.horizontal(|ui| {
             if running {
                 if ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, RED), RichText::new("Cancel").color(RED))).clicked() {
-                    job.expect("running job").cancel();
+                    self.confirm_cancel = Some(id);
                 }
             } else {
                 let label = if busy_other || !self.queue.is_empty() { "Add to queue" } else { "Run" };
@@ -198,6 +198,39 @@ impl App {
         }
         self.pump_queue();
         self.save_config();
+    }
+
+    /// Asked when Cancel is clicked, so a run isn't lost to a stray click.
+    pub(super) fn confirm_cancel_dialog(&mut self, ctx: &egui::Context, id: FlowId) {
+        let title = self.cfg.forms.get(id).title();
+        let mut close = false;
+        let mut cancel = false;
+        let modal = egui::Modal::new(egui::Id::new("confirm_cancel")).show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.heading(format!("Cancel {title}?"));
+            ui.label("Progress made so far is lost.");
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, RED), RichText::new("Cancel the run").color(RED))).clicked()
+                {
+                    cancel = true;
+                }
+                if ui.button("Keep running").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if modal.should_close() {
+            close = true;
+        }
+        if cancel {
+            if let Some(h) = self.jobs.get(&id) {
+                h.cancel();
+            }
+            self.confirm_cancel = None;
+        } else if close {
+            self.confirm_cancel = None;
+        }
     }
 }
 

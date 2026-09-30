@@ -45,6 +45,12 @@ pub struct App {
     /// Flow whose setup dialog is open.
     prompt: Option<FlowId>,
     prompted: Option<FlowId>,
+    /// Flow whose "cancel this run?" dialog is open.
+    confirm_cancel: Option<FlowId>,
+    /// "Quit while a flow is running?" dialog is open.
+    confirm_quit: bool,
+    /// Set right before re-sending the close command, so that close isn't intercepted a second time.
+    allow_close: bool,
     /// Unsaved text typed into env var fields (setup dialog and settings).
     env_edit: HashMap<&'static str, String>,
     free_models: Arc<Mutex<FreeModels>>,
@@ -79,6 +85,9 @@ impl App {
             queue: VecDeque::new(),
             prompt: None,
             prompted: None,
+            confirm_cancel: None,
+            confirm_quit: false,
+            allow_close: false,
             env_edit: HashMap::new(),
             free_models: Arc::default(),
             notice: None,
@@ -339,6 +348,36 @@ impl App {
         }
     }
 
+    /// Asked once when the window is closed while a flow is running or queued.
+    fn confirm_quit_dialog(&mut self, ctx: &egui::Context) {
+        let mut close = false;
+        let mut quit = false;
+        let modal = egui::Modal::new(egui::Id::new("confirm_quit")).show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.heading("Quit local-llm?");
+            ui.label("A flow is still running - quitting stops it and loses its progress.");
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, RED), RichText::new("Quit anyway").color(RED))).clicked() {
+                    quit = true;
+                }
+                if ui.button("Keep running").clicked() {
+                    close = true;
+                }
+            });
+        });
+        if modal.should_close() {
+            close = true;
+        }
+        if quit {
+            self.confirm_quit = false;
+            self.allow_close = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if close {
+            self.confirm_quit = false;
+        }
+    }
+
     fn notice_ui(&mut self, ui: &mut egui::Ui) {
         if let Some((text, error, at)) = &self.notice {
             if at.elapsed() > Duration::from_secs(8) {
@@ -382,6 +421,15 @@ impl eframe::App for App {
         self.tick();
         self.pump_queue();
 
+        if ui.ctx().input(|i| i.viewport().close_requested()) && !self.allow_close {
+            if self.running.is_some() || !self.queue.is_empty() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.confirm_quit = true;
+            } else {
+                self.allow_close = true;
+            }
+        }
+
         let dropped: Vec<PathBuf> = ui.ctx().input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty()
             && let Page::Flow(id) = self.cfg.page
@@ -412,6 +460,14 @@ impl eframe::App for App {
         if let Some(id) = self.prompt {
             let ctx = ui.ctx().clone();
             self.setup_dialog(&ctx, id);
+        }
+        if let Some(id) = self.confirm_cancel {
+            let ctx = ui.ctx().clone();
+            self.confirm_cancel_dialog(&ctx, id);
+        }
+        if self.confirm_quit {
+            let ctx = ui.ctx().clone();
+            self.confirm_quit_dialog(&ctx);
         }
     }
 
