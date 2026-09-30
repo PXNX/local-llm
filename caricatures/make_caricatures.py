@@ -86,10 +86,12 @@ def describe(img):
 
 
 # ---------------------------------------------------------------- 2. draw
-def draw(prompt, seed, photo=None, strength=0.75):
+def draw(prompt, seed, photo=None, strength=0.75, size=None):
     wf = json.loads((HERE / "caricature_workflow_api.json").read_text())
     wf["6"]["inputs"]["text"] = prompt
     wf["7"]["inputs"]["seed"] = seed
+    if size:
+        wf["5"]["inputs"]["width"], wf["5"]["inputs"]["height"] = size
     if photo is not None:
         # img2img: start from the photo (pre-scaled to ~1 MP, multiples of 64) instead of noise
         scale = (1024 * 1024 / (photo.width * photo.height)) ** 0.5
