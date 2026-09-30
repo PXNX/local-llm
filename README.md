@@ -52,7 +52,7 @@ GPU memory, so ComfyUI keeps its models loaded between runs.
 | `8-objects.bat` | Objects/buildings (`--thing "S-400 air defense system"`, refinery, Kremlin, sea mine, oil tanker ...) in the same flat cartoon look, 4 views/states (side, 3/4, on fire, damaged), optionally transparent + SVG. Result: `caricatures\out\<thing>\` |
 | `9-top5-videos.bat` | Today's videos from Telegram channels (`topvideos\channels.txt`, e.g. `1482614635`) -> one countdown video "Top 5 Funniest/Cutest Videos of Today" from #5 to #1. Needs a Telegram API key (`.env`) and the vision AI (OpenRouter or Ollama, rates the clips). Fluent Emoji (Iconify) on the cards and thumbnail; every processed post is logged with its `t.me` link. Result: `topvideos\out\top5_<topic>_<date>.mp4` + a credits `.txt` |
 | `10-image-to-video.bat` | Image -> short animated MP4 clip (the image is the first frame). Drag & drop an image onto it or double-click and pick one. The vision AI writes the motion prompt unless you give `--prompt`. `--res 480p|720p|1080p|1440p|4k` (above 720p the clip is upscaled from Wan's 720p maximum). Wan 2.2 TI2V 5B in ComfyUI (already downloaded), roughly 10-30 min per clip. Starts Ollama + ComfyUI automatically. Result: `img2video\out\` |
-| `11-animate-stickers.bat` | Stickers from Flow 2 -> animated Telegram video stickers (WebM VP9 with transparency, 512 px, max 3 s, max 256 KB). Drag & drop a sticker folder (`stickers\out\<image name>\`) or `.webp` files onto it, or double-click and pick a folder. Default: a looping body motion that matches each reaction (seconds, no GPU); `--mode ai` animates with Wan 2.2 instead. Result: `<sticker>.webm` next to each sticker |
+| `11-animate-stickers.bat` | Stickers from Flow 2 -> animated Telegram video stickers (WebM VP9 with transparency, 512 px, max 3 s, max 256 KB). Drag & drop a sticker folder (`stickers\out\<image name>\`) or `.webp` files onto it, or double-click and pick a folder. Each character acts out its own pose (the raised paw waves, the hug squeezes tighter, the dancer dances ...) with Wan 2.2 in ComfyUI, roughly 5-15 min per sticker; `--mode loop` is a quick CPU-only fallback. Result: `<sticker>.webm` next to each sticker |
 
 ### Sticker options (`2-stickers.bat photo.jpg [options]`)
 - `--count 5` number of stickers (each with a different reaction and pose; one character look and text style per batch)
@@ -76,14 +76,15 @@ reads as one sticker pack. Output: 512x512 WebP < 100 KB (WhatsApp/Telegram), on
 `stickers\out\<image name>\` plus a `stickers.json` with each sticker's text and pose and `layers\` (character and text separately, for Flow 11).
 
 ### Animated sticker options (`11-animate-stickers.bat <sticker folder or files> [options]`)
-- `--motion sway` loop type: `sway`, `breathe`, `hop`, `tremble`; default `auto` picks it from the sticker's
-  text/pose in `stickers.json` (sway for love/hi, breathe for tired, tremble for oh no, hop for yes ...).
-  The body is bent, not moved as a stiff picture: feet stay planted, the lean grows towards the head,
-  breathing lifts the chest; the text layer stays still on top
-- `--seconds 2` clip length, max 3 (Telegram limit)
-- `--mode ai` Wan 2.2 TI2V 5B in ComfyUI animates the sticker itself (the pose from `stickers.json`, or
-  `--prompt "the cat waves its paw"`), then rembg cuts out every frame - real motion, roughly 10-30 min per
-  sticker, the text is added afterwards so it stays still; `--steps 20`, `--seed 0`
+- Default: Wan 2.2 TI2V 5B in ComfyUI starts from the sticker's character layer and animates the action
+  its pose implies - the LLM turns the pose in `stickers.json` ("waving one paw ...", "tightly hugging a
+  small kitten ...") into a motion prompt ("the cat waves its raised paw side to side twice"). rembg cuts
+  out every frame, the text layer is laid back on top (still), and the clip plays forth and back so it
+  loops smoothly (`--no-pingpong` to turn that off). Roughly 5-15 min per sticker on the RTX 2060.
+- `--prompt "the cat waves its raised paw"` your own action instead of the derived one
+- `--seconds 3` clip length, max 3 (Telegram limit); `--steps 20`, `--seed 0`
+- `--mode loop` quick fallback without GPU: the body is bent in a simple loop (`--motion sway`, `breathe`,
+  `hop`, `tremble`, `dance`, `squeeze`; `auto` picks one from the pose)
 - The `.webm` files are ready for Telegram's @Stickers bot (`/newvideo`); the encoder raises the
   compression until each file is under 256 KB.
 
