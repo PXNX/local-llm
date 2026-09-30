@@ -104,9 +104,13 @@ def caption(img, count, lang, texts=None):
         '{"expression": "<a specific, exaggerated pose/face that unmistakably acts out that exact emotion for an '
         'image generator: always the face (eyes, mouth) AND what the body/paws/hands do - e.g. hugging a big red '
         'heart with eyes closed and a blissful smile for love, waving one paw with a big open-mouthed smile for hi, wide-mouthed mid-yawn for tired, one paw/hand covering the face for embarrassment, '
-        'running mid-stride for on my way, big pleading eyes for please, eyes closed turned away for annoyed - '
+        'running mid-stride for on my way, big pleading eyes for please, eyes closed turned away for annoyed; '
+        'whole-body gestures work great too: tightly hugging a small fluffy kitten or plush cat for cuddle/miss you, '
+        'dancing on the hind legs with both paws/arms up for party, heart hands for love, high five, thumbs up, '
+        'blowing a kiss, shrugging, facepalm, curled up asleep, jumping for joy, peeking from the side for hi - '
+        'every sticker a clearly different gesture, mix face-only and whole-body actions - '
         'optionally plus one small doodle that underlines it (floating pink hearts, question marks, zzz, sparkles, '
-        'sweat drop, motion lines) - no words, no quotes, nothing written - max 20 words>", '
+        'sweat drop, motion lines) - no words, no quotes, nothing written - max 25 words>", '
         + ('"text": "<that text, unchanged>"}>]}' if texts else
            f'"text": "<a short reaction-sticker text in {lang}, 1-3 words, like chat-sticker classics: '
            '\\"Hi there!\\", \\"Yes!\\", \\"Nope\\", \\"Thank youuuu\\", \\"Wait, what?\\", \\"Please?\\", \\"Oh no!\\", \\"Kisses!\\" '
@@ -322,6 +326,14 @@ def save_webp(img, path):
 
 
 # ---------------------------------------------------------------- main
+def free_comfy_vram():
+    """ComfyUI keeps FLUX in VRAM after a run; on 6 GB the local vision model then crawls into a timeout."""
+    if reachable(COMFY_URL):
+        req = urllib.request.Request(f"{COMFY_URL}/free", data=b'{"unload_models": true, "free_memory": true}',
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=30).read()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("image", type=Path)
@@ -351,11 +363,7 @@ def main():
         stickers = [{"expression": "", "text": t} for t in args.text]
     if not args.text or not args.no_stylize:
         if llm.available():
-            if llm.is_local() and reachable(COMFY_URL):
-                # ComfyUI keeps FLUX in VRAM after a run; on 6 GB the vision model then crawls into a timeout
-                req = urllib.request.Request(f"{COMFY_URL}/free", data=b'{"unload_models": true, "free_memory": true}',
-                                             headers={"Content-Type": "application/json"})
-                urllib.request.urlopen(req, timeout=30).read()
+            llm.before_local = free_comfy_vram
             print(f"[caption] asking {llm.label()} ...")
             subject, llm_stickers = caption(src, args.count, args.lang, args.text)
             if args.text:  # keep the given texts, take the poses the model picked for them
@@ -397,9 +405,9 @@ def main():
         (out_dir / "layers").mkdir(exist_ok=True)
         char.save(out_dir / "layers" / f"{path.stem}_character.png")
         text_layer.save(out_dir / "layers" / f"{path.stem}_text.png")
-        made.append({"file": path.name, "text": text, "expression": expression,
+        made.append({"file": path.name, "text": text, "expression": expression, "subject": subject,
                      "character": f"layers/{path.stem}_character.png", "text_layer": f"layers/{path.stem}_text.png"})
-    # text + pose + layers per sticker, animate_stickers.py picks a matching loop and moves only the body
+    # text + pose + layers per sticker: animate_stickers.py animates exactly that pose, the text stays still
     (out_dir / "stickers.json").write_text(json.dumps(made, indent=2, ensure_ascii=False), encoding="utf-8")
 
 

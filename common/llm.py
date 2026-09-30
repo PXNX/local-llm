@@ -153,7 +153,14 @@ def _ask(prompt, b64, temperature, keep_alive, ollama_options):
     return _ollama(prompt, b64, temperature, keep_alive, ollama_options)
 
 
+# optional callable run right before every local Ollama call, also the fallback after OpenRouter failed
+# (make_stickers.py frees ComfyUI's VRAM with it - on 6 GB the vision model otherwise times out)
+before_local = None
+
+
 def _ollama(prompt, b64, temperature, keep_alive, ollama_options):
+    if before_local:
+        before_local()
     msg = {"role": "user", "content": prompt}
     if b64:
         msg["images"] = [b64]
