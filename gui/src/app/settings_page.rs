@@ -294,6 +294,7 @@ impl App {
                     self.notify(format!("could not run git: {e}"), true);
                 }
             }
+            self.desktop_shortcut_button(ui, &root);
         });
         match self.health.latest().and_then(|s| s.gpu) {
             Some(g) => {
@@ -330,6 +331,19 @@ impl App {
         sys::new_console(&mut cmd);
         if let Err(e) = cmd.spawn() {
             self.notify(format!("could not run setup.bat: {e}"), true);
+        }
+    }
+
+    fn desktop_shortcut_button(&mut self, ui: &mut egui::Ui, root: &std::path::Path) {
+        if !ui::button(ui, icons::DESKTOP_TOWER, "Create desktop shortcut")
+            .on_hover_text("local-llm.lnk on the Desktop, starting this exe in the local-llm folder (replaces an old one)")
+            .clicked()
+        {
+            return;
+        }
+        match std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| sys::create_desktop_shortcut(&exe, root)) {
+            Ok(lnk) => self.notify(format!("Shortcut created: {}", lnk.display()), false),
+            Err(e) => self.notify(format!("could not create the shortcut: {e}"), true),
         }
     }
 }

@@ -43,6 +43,13 @@ if not exist "ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF" (
 )
 "%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]" vtracer yt-dlp scikit-learn telethon qrcode imageio-ffmpeg resvg-py kokoro-onnx
 
+if exist "%~dp0gui\target\release\local-llm.exe" (
+  echo === Desktop shortcut local-llm.lnk
+  set "LLM_EXE=%~dp0gui\target\release\local-llm.exe"
+  set "LLM_DIR=%~dp0."
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$l = Join-Path ([Environment]::GetFolderPath('Desktop')) 'local-llm.lnk'; $s = (New-Object -ComObject WScript.Shell).CreateShortcut($l); $s.TargetPath = $env:LLM_EXE; $s.WorkingDirectory = (Resolve-Path $env:LLM_DIR).Path; $s.IconLocation = $env:LLM_EXE + ',0'; $s.Save(); Write-Output $l"
+)
+
 echo.
 echo Done. Next steps:
 echo   1. Update the NVIDIA driver to ^>= 580 (needed by ComfyUI, see README).

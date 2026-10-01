@@ -23,7 +23,8 @@ fn main() -> eframe::Result {
             .with_title("local-llm")
             .with_inner_size([1200.0, 800.0])
             .with_min_inner_size([860.0, 540.0])
-            .with_drag_and_drop(true),
+            .with_drag_and_drop(true)
+            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).expect("valid icon png")),
         // no MSAA/depth/stencil buffers: the GUI keeps its GPU footprint minimal for ComfyUI/Ollama
         multisampling: 0,
         depth_buffer: 0,
