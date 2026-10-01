@@ -4,6 +4,7 @@ use std::time::Duration;
 use eframe::egui::{self, RichText};
 
 use super::{App, mmss};
+use crate::config::Page;
 use crate::flows::FlowId;
 use crate::icons;
 use crate::jobs::{self, JobHandle, Launch, Line, State};
@@ -75,84 +76,30 @@ impl App {
         });
     }
 
+    /// Two rows: what the button does (run now / add to the queue), then how this flow's latest run is doing.
     fn run_bar(&mut self, ui: &mut egui::Ui, id: FlowId, job: Option<&JobHandle>) {
         let args = self.cfg.forms.get(id).args();
-        let running = job.is_some_and(|h| h.job.lock().unwrap().running());
         let queued = self.queue.iter().filter(|(q, _)| *q == id).count();
-        let busy_other = self.running.is_some_and(|r| r != id);
+        let busy = self.running.is_some() || !self.queue.is_empty();
+        let mut open_queue = false;
         ui.horizontal(|ui| {
-            if running {
-                if ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, RED), RichText::new("Cancel").color(RED))).clicked() {
-                    self.confirm_cancel = Some(id);
-                }
+            let (icon, label, tip) = if busy {
+                (icons::PLAYLIST_PLUS, "Add to queue", "only one flow runs at a time - this run waits with the settings as they are now")
             } else {
-                let label = if busy_other || !self.queue.is_empty() { "Add to queue" } else { "Run" };
-                if ui::primary(ui, args.is_ok(), icons::PLAY, label)
-                    .on_hover_text("only one flow runs at a time, the rest waits in the queue")
-                    .clicked()
-                {
-                    self.run(id);
-                }
-                if let Err(e) = &args {
-                    ui::status(ui, icons::INFORMATION_OUTLINE, AMBER, e.as_str());
-                }
+                (icons::PLAY, "Run", "starts right away; press again to line up more runs")
+            };
+            if ui::primary(ui, args.is_ok(), icon, label).on_hover_text(tip).clicked() {
+                self.run(id);
+            }
+            if let Err(e) = &args {
+                ui::status(ui, icons::INFORMATION_OUTLINE, AMBER, e.as_str());
             }
             if queued > 0 {
-                ui.label(RichText::new(format!("{queued} more queued")).weak());
+                open_queue = ui.link(format!("{queued} of these waiting in the queue")).clicked();
             }
-            if let Some(h) = job {
-                let mut j = h.job.lock().unwrap();
-                let time = mmss(j.elapsed());
-                match j.state.clone() {
-                    State::Running => {
-                        let frac = j.progress.fraction();
-                        let eta = j.eta();
-                        let what = match (j.progress.item, j.progress.step) {
-                            (Some((i, n)), Some((s, m))) => format!("{} {i}/{n} · step {s}/{m}", j.progress.label),
-                            (Some((i, n)), None) => format!("{} {i}/{n}", j.progress.label),
-                            (None, Some((s, m))) => format!("step {s}/{m}"),
-                            (None, None) if j.console => "in the console window".into(),
-                            (None, None) => "working".into(),
-                        };
-                        let text = format!("{what} · {time}{}", eta.map(|e| format!(" · about {} left", mmss(e))).unwrap_or_default());
-                        ui.add(
-                            egui::ProgressBar::new(frac.unwrap_or(0.0))
-                                .desired_width(ui.available_width().min(460.0) - 190.0)
-                                .text(text)
-                                .animate(frac.is_none()),
-                        );
-                        ui.ctx().request_repaint_after(Duration::from_secs(1));
-                    }
-                    State::Finished(0) => {
-                        ui::status(ui, icons::CHECK_CIRCLE, GREEN, format!("done in {time}"));
-                    }
-                    State::Finished(code) => {
-                        ui::status(
-                            ui,
-                            icons::ALERT_CIRCLE,
-                            RED,
-                            format!("failed (exit code {code}) after {time} - see the messages below"),
-                        );
-                    }
-                    State::Failed(e) => {
-                        ui::status(ui, icons::ALERT_CIRCLE, RED, e);
-                    }
-                    State::Cancelled => {
-                        ui::status(ui, icons::STOP, AMBER, "cancelled");
-                    }
-                }
-                let out = j.out_dir.clone();
-                let command = j.command.clone();
-                drop(j);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui::button(ui, icons::FOLDER_OPEN, "Open results").clicked() {
-                        jobs::open_dir(&out);
-                    }
-                    if ui::tool(ui, icons::CONTENT_COPY, &format!("copy the command line:\n{command}")).clicked() {
-                        ui.ctx().copy_text(command);
-                    }
-                });
-            } else if let Some(r) = &self.repo {
+            if job.is_none()
+                && let Some(r) = &self.repo
+            {
                 let out = self.cfg.forms.get(id).out_dir(&r.paths.root);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if out.exists() && ui::button(ui, icons::FOLDER_OPEN, "Open results").clicked() {
@@ -160,6 +107,20 @@ impl App {
                     }
                 });
             }
+        });
+        if open_queue {
+            self.select(Page::Queue);
+        }
+        let Some(h) = job else { return };
+        let running = h.job.lock().unwrap().running();
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(if running { "Running:" } else { "Last run:" }).weak());
+            run_status(ui, h, ui.available_width().min(540.0) - 270.0);
+            if running && cancel_button(ui) {
+                self.ask_cancel(id);
+            }
+            run_actions(ui, h);
         });
     }
 
@@ -201,7 +162,8 @@ impl App {
     }
 
     /// Asked when Cancel is clicked, so a run isn't lost to a stray click.
-    pub(super) fn confirm_cancel_dialog(&mut self, ctx: &egui::Context, id: FlowId) {
+    pub(super) fn confirm_cancel_dialog(&mut self, ctx: &egui::Context) {
+        let Some((id, h)) = self.confirm_cancel.clone() else { return };
         let title = self.cfg.forms.get(id).title();
         let mut close = false;
         let mut cancel = false;
@@ -224,14 +186,68 @@ impl App {
             close = true;
         }
         if cancel {
-            if let Some(h) = self.jobs.get(&id) {
-                h.cancel();
-            }
-            self.confirm_cancel = None;
-        } else if close {
+            h.cancel();
+        }
+        // also closes by itself when the run ends while asking
+        if cancel || close || !h.job.lock().unwrap().running() {
             self.confirm_cancel = None;
         }
     }
+}
+
+pub(super) fn cancel_button(ui: &mut egui::Ui) -> bool {
+    ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, RED), RichText::new("Cancel").color(RED))).clicked()
+}
+
+/// Progress bar while running, else how the run ended.
+pub(super) fn run_status(ui: &mut egui::Ui, h: &JobHandle, width: f32) {
+    let mut j = h.job.lock().unwrap();
+    let time = mmss(j.elapsed());
+    match j.state.clone() {
+        State::Running => {
+            let frac = j.progress.fraction();
+            let eta = j.eta();
+            let what = match (j.progress.item, j.progress.step) {
+                (Some((i, n)), Some((s, m))) => format!("{} {i}/{n} · step {s}/{m}", j.progress.label),
+                (Some((i, n)), None) => format!("{} {i}/{n}", j.progress.label),
+                (None, Some((s, m))) => format!("step {s}/{m}"),
+                (None, None) if j.console => "in the console window".into(),
+                (None, None) => "working".into(),
+            };
+            let text = format!("{what} · {time}{}", eta.map(|e| format!(" · about {} left", mmss(e))).unwrap_or_default());
+            ui.add(egui::ProgressBar::new(frac.unwrap_or(0.0)).desired_width(width.max(120.0)).text(text).animate(frac.is_none()));
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
+        State::Finished(0) => {
+            ui::status(ui, icons::CHECK_CIRCLE, GREEN, format!("done in {time}"));
+        }
+        State::Finished(code) => {
+            ui::status(ui, icons::ALERT_CIRCLE, RED, format!("failed (exit code {code}) after {time}"))
+                .on_hover_text("the flow's log says why");
+        }
+        State::Failed(e) => {
+            ui::status(ui, icons::ALERT_CIRCLE, RED, e);
+        }
+        State::Cancelled => {
+            ui::status(ui, icons::STOP, AMBER, format!("cancelled after {time}"));
+        }
+    }
+}
+
+/// Right-aligned "Open results" and "copy command line" of a run.
+pub(super) fn run_actions(ui: &mut egui::Ui, h: &JobHandle) {
+    let (out, command) = {
+        let j = h.job.lock().unwrap();
+        (j.out_dir.clone(), j.command.clone())
+    };
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if ui::button(ui, icons::FOLDER_OPEN, "Open results").clicked() {
+            jobs::open_dir(&out);
+        }
+        if ui::tool(ui, icons::CONTENT_COPY, &format!("copy the command line:\n{command}")).clicked() {
+            ui.ctx().copy_text(command);
+        }
+    });
 }
 
 /// Virtualized: only the visible rows are laid out, so long logs stay cheap.
@@ -354,7 +370,8 @@ mod tests {
 
     #[test]
     fn multibyte_chars_do_not_panic() {
-        for text in ["[chan ] 🍌 Memes und mehr 🍌 #Россия: 4 video(s)", "Abonniere @NYX_Memes für mehr!", "a ü", "x 😂 C:\\out"] {
+        for text in ["[chan ] 🍌 Memes und mehr 🍌 #Россия: 4 video(s)", "Abonniere @NYX_Memes für mehr!", "a ü", "x 😂 C:\\out"]
+        {
             let line = Line { time: "00:00:00".into(), text: text.into(), err: false, colors: Vec::new() };
             assert_eq!(segments(&line).iter().map(|(s, _, _)| *s).collect::<String>(), text);
         }
