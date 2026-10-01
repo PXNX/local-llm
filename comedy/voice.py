@@ -3,7 +3,9 @@
 kokoro (default): Kokoro-82M (ONNX, CPU), ~20 English voices plus a few other languages; the two
 model files (~350 MB) are downloaded once into the models folder's kokoro/ (common/storage.py).
 sapi: the voices built into Windows (David, Zira, Hedda ...) - used for languages Kokoro can't speak.
-Each character gets its own voice and pitch; lines are cached in comedy/cache/tts/.
+Each character gets its own voice and pitch; lines are cached in comedy/cache/tts/. KNOWN hand-picks
+voice+pitch for a handful of famous names; for everyone else assign() can ask the LLM for a pitch/speed
+that fits how the character actually sounds (optional, best effort, never required).
 """
 import hashlib
 import json
@@ -47,11 +49,52 @@ VOICE_LANG = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "i": "it", "p
               "z": "cmn"}
 SAPI_CULTURE = {"german": "de", "english": "en", "french": "fr", "spanish": "es", "italian": "it", "polish": "pl",
                 "dutch": "nl", "portuguese": "pt", "russian": "ru", "ukrainian": "uk", "japanese": "ja", "chinese": "zh"}
-# well-known characters, English: (voice, semitones)
+# well-known characters, English: (voice, semitones) - hand-picked after listening, takes priority
 KNOWN = {"trump": ("am_onyx", -1), "putin": ("am_puck", 2), "zelensky": ("am_michael", 0), "macron": ("bm_lewis", 0),
          "xi": ("am_eric", -1), "kim": ("am_echo", 3), "merz": ("bm_george", 0), "khamenei": ("bm_fable", -3),
          "orban": ("bm_daniel", 1), "biden": ("am_adam", -1), "erdogan": ("am_fenrir", -2)}
 PITCHES = [0, -2, 2, -4, 3, -5, 4]
+VOICE_PROMPT = """For each cartoon character below, estimate how their speaking voice should differ from a
+neutral narrator, for a comedic caricature. Base it on how they actually sound publicly (real public
+figures: their real pace/pitch/gravity; fictional ones: their implied persona) - exaggerate slightly
+for comic effect, but keep every line understandable.
+
+Characters:
+{listing}
+
+Reply with JSON only: {{"<name>": {{"pitch": <int -5..5, negative = deeper/older/graver, positive =
+higher/younger/more nasal, 0 = unremarkable>, "speed": <float 0.85..1.15, slower for deliberate/pompous
+speakers, faster for rushed/anxious ones, 1.0 = average>}}, ...}} - one entry per character, using
+their exact "name" as the key.
+"""
+
+
+def llm_profiles(cast, llm):
+    """Asks the LLM for a pitch/speed per character that matches how they actually sound (real public
+    figures) or their persona (fictional) - fills in the gap KNOWN only covers for a handful of names.
+    Best effort: returns {} on any failure so a sketch never breaks over a missing/flaky LLM."""
+    if llm is None or not cast:
+        return {}
+    try:
+        if not llm.available():
+            return {}
+        listing = "\n".join(f"- {m['name']} ({m.get('who', m['name'])}, {m['gender']})" for m in cast)
+        reply = llm.text_json(VOICE_PROMPT.format(listing=listing), temperature=0.4)
+        llm.unload()
+        out = {}
+        if isinstance(reply, dict):
+            for m in cast:
+                p = reply.get(m["name"])
+                if isinstance(p, dict):
+                    try:
+                        out[m["name"]] = {"pitch": max(-5, min(5, int(round(float(p.get("pitch", 0)))))),
+                                          "speed": max(0.85, min(1.15, float(p.get("speed", 1.0))))}
+                    except (TypeError, ValueError):
+                        pass
+        return out
+    except Exception as e:
+        print(f"[voice  ] LLM voice profile failed ({str(e)[:120]}), using default pitch/speed")
+        return {}
 
 
 def _download():
@@ -151,10 +194,13 @@ class Voices:
     def label(self):
         return "Kokoro-82M" if self.engine == "kokoro" else "Windows SAPI"
 
-    def assign(self, cast):
+    def assign(self, cast, llm=None):
         """Fills voice/pitch into each cast member that has none (a script.json may set them).
-        Characters that have to share a voice get different pitches."""
+        Characters that have to share a voice get different pitches. If an llm module is given, it
+        suggests a pitch/speed fitting how the character actually sounds, for names KNOWN doesn't
+        hardcode - same priority as KNOWN: set before the voice-collision fallback."""
         used = []
+        profiles = llm_profiles(cast, llm)
         for i, m in enumerate(cast):
             if "voice" not in m:
                 if self.engine == "kokoro":
@@ -169,6 +215,10 @@ class Voices:
                 if "voice" not in m:
                     free = [v for v in pool if v not in used]
                     m["voice"] = free[0] if free else pool[i % len(pool)]
+            p = profiles.get(m["name"])
+            if p:
+                m.setdefault("pitch", p["pitch"])
+                m.setdefault("speed", p["speed"])
             if m["voice"] in used:
                 m.setdefault("pitch", PITCHES[1 + used.count(m["voice"]) % (len(PITCHES) - 1)])
             m.setdefault("pitch", 0)

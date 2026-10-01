@@ -109,7 +109,7 @@ def main():
 
     # ---- 3a. voices first: they don't need the GPU and fix the cast's voices in script.json
     voices = voice.Voices(script["lang"], args.voice_engine)
-    voices.assign(script["cast"])
+    voices.assign(script["cast"], llm)
     (folder / "script.json").write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
     (folder / "script.txt").write_text(writer.as_text(script), encoding="utf-8")
     print(f"[write  ] {folder / 'script.json'}")
