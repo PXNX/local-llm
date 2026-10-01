@@ -1,13 +1,14 @@
 """Voices for the dialogue, fully local.
 
 kokoro (default): Kokoro-82M (ONNX, CPU), ~20 English voices plus a few other languages; the two
-model files (~350 MB) are downloaded once into comedy/models/.
+model files (~350 MB) are downloaded once into the models folder's kokoro/ (common/storage.py).
 sapi: the voices built into Windows (David, Zira, Hedda ...) - used for languages Kokoro can't speak.
 Each character gets its own voice and pitch; lines are cached in comedy/cache/tts/.
 """
 import hashlib
 import json
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import wave
@@ -17,7 +18,12 @@ import numpy as np
 from scipy import signal
 
 HERE = Path(__file__).resolve().parent
-MODELS = HERE / "models"
+sys.path.insert(0, str(HERE.parent))
+from common import storage  # noqa: E402
+
+MODELS = storage.path("kokoro")
+if not (MODELS / "kokoro-v1.0.onnx").exists() and (HERE / "models" / "kokoro-v1.0.onnx").exists():
+    MODELS = HERE / "models"  # downloaded by an older version, until moved (GUI > Models > Move them)
 CACHE = HERE / "cache" / "tts"
 SR = 44100
 KOKORO_FILES = {

@@ -7,6 +7,7 @@ use super::{App, status_text};
 use crate::flows::FlowId;
 use crate::icons;
 use crate::models::{Dl, Models, Share, Status, Task, ollama_id};
+use crate::paths;
 use crate::servers::{self, Server};
 use crate::sys;
 use crate::ui::{self, AMBER, GREEN, RED};
@@ -18,23 +19,24 @@ impl App {
         ui.label(RichText::new("Every model file in one place. Nothing is downloaded or stored twice: finished files are marked, files that already exist under another name - or as an Ollama model with the same bytes - are hard-linked instead of copied.").weak());
         ui.add_space(6.0);
 
-        let comfy_dir = models.target_root().unwrap_or_default();
-        let ollama_dir = self.ollama_dir();
+        let dir = self.models_dir();
         ui::card(ui, |ui| {
-            for (icon, name, dir) in [(icons::HARDDISK, "ComfyUI models", &comfy_dir), (icons::ROBOT, "Ollama models", &ollama_dir)] {
-                ui.horizontal(|ui| {
-                    let c = ui.visuals().text_color();
-                    ui::icon(ui, icon, c);
-                    ui.label(format!("{name}:"));
-                    if ui.link(dir.display().to_string()).on_hover_text("open the folder").clicked() {
-                        sys::open(dir);
-                    }
-                    if let Some(free) = sys::free_space(dir) {
-                        ui.label(RichText::new(format!("{} free", sys::human(free))).weak());
-                    }
-                });
-            }
-            ui.label(RichText::new("Change the folders under Settings > Model storage (e.g. both on one big drive).").small().weak());
+            ui.horizontal(|ui| {
+                let c = ui.visuals().text_color();
+                ui::icon(ui, icons::HARDDISK, c);
+                ui.label("Models folder:");
+                if ui.link(dir.display().to_string()).on_hover_text("open the folder").clicked() {
+                    sys::open(&dir);
+                }
+                if let Some(free) = sys::free_space(&dir) {
+                    ui.label(RichText::new(format!("{} free", sys::human(free))).weak());
+                }
+            });
+            ui.label(
+                RichText::new("ComfyUI, Ollama, Hugging Face, torch, rembg and Kokoro all store their models here. Change it under Settings > Model storage.")
+                    .small()
+                    .weak(),
+            );
         });
         ui.add_space(6.0);
 
@@ -166,7 +168,11 @@ impl App {
                     }
                     if ui::button(ui, icons::CLOSE, "OK").clicked() {
                         models.clear_move();
-                        self.cfg.ollama_prev = None;
+                        if mv.errors.is_empty() {
+                            self.cfg.ollama_prev = None;
+                            self.cfg.models_prev = None;
+                            self.configure_models();
+                        }
                     }
                 } else {
                     let frac = mv.done as f32 / mv.total.max(1) as f32;
@@ -181,25 +187,39 @@ impl App {
             });
             return;
         }
-        let plan = models.move_plan(self.cfg.ollama_prev.as_deref());
+        let plan = models.move_plan();
         if plan.is_empty() {
             return;
         }
-        let bytes: u64 = plan.iter().map(|(s, _)| std::fs::metadata(s).map_or(0, |m| m.len())).sum();
-        let moves_ollama =
-            self.cfg.ollama_prev.is_some() && plan.iter().any(|(s, _)| self.cfg.ollama_prev.as_ref().is_some_and(|p| s.starts_with(p)));
+        let bytes: u64 = plan.iter().map(|m| m.size).sum();
+        let mut labels: Vec<(&str, u64)> = Vec::new();
+        for m in &plan {
+            match labels.iter_mut().find(|(l, _)| *l == m.label) {
+                Some((_, b)) => *b += m.size,
+                None => labels.push((m.label, m.size)),
+            }
+        }
+        let ollama_dir = self.models_dir().join(paths::OLLAMA);
+        let moves_ollama = plan.iter().any(|m| m.to.starts_with(&ollama_dir));
         ui::card(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui::icon(ui, icons::FOLDER_MOVE, AMBER);
-                ui.label(format!("{} model file(s) ({}) are still in the old folders.", plan.len(), sys::human(bytes)));
-                let ollama_running = moves_ollama && self.servers.up(Server::Ollama);
-                if ollama_running {
-                    ui.label(RichText::new("Stop Ollama first:").color(AMBER));
-                    if ui::button(ui, icons::POWER, "Stop Ollama").clicked() {
+                let from: Vec<String> = labels.iter().map(|(l, b)| format!("{l} {}", sys::human(*b))).collect();
+                ui.label(format!(
+                    "{} file(s) ({}) are still outside the models folder: {}.",
+                    plan.len(),
+                    sys::human(bytes),
+                    from.join(", ")
+                ))
+                .on_hover_text("Hugging Face and torch: only their model caches move (other programs download again if they need them)");
+                let running = (moves_ollama && self.servers.up(Server::Ollama)) || self.servers.up(Server::Comfy);
+                if running {
+                    ui.label(RichText::new("Stop ComfyUI and Ollama first:").color(AMBER));
+                    if self.servers.up(Server::Ollama) && ui::button(ui, icons::POWER, "Stop Ollama").clicked() {
                         servers::stop_ollama();
                     }
                 }
-                if ui::button_enabled(ui, !ollama_running, icons::FOLDER_MOVE, "Move them")
+                if ui::button_enabled(ui, !running, icons::FOLDER_MOVE, "Move them")
                     .on_hover_text("instant on the same drive, otherwise copied and then deleted")
                     .clicked()
                 {

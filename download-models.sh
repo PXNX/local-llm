@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
-# Downloads all ComfyUI models into ComfyUI_windows_portable/ComfyUI/models.
-# Safe to re-run: finished files are skipped, partial files are resumed.
-cd "$(dirname "$0")/ComfyUI_windows_portable/ComfyUI/models" || exit 1
+# Downloads all ComfyUI models into the one models folder: MODELS_DIR from the environment or .env
+# (relative = inside the repo), default <repo>/models - the same as the GUI and common/models-env.bat.
+# Safe to re-run: finished files are skipped, partial files are resumed, files still in
+# ComfyUI_windows_portable/ComfyUI/models are moved over instead of downloaded again.
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+OLD="$ROOT/ComfyUI_windows_portable/ComfyUI/models"
+if [ -z "$MODELS_DIR" ] && [ -f "$ROOT/.env" ]; then
+  MODELS_DIR=$(sed -n 's/^[[:space:]]*MODELS_DIR[[:space:]]*=[[:space:]]*//p' "$ROOT/.env" | tail -n 1 | tr -d "\r\"'")
+fi
+MODELS_DIR="${MODELS_DIR:-$ROOT/models}"
+command -v cygpath >/dev/null && MODELS_DIR=$(cygpath -u "$MODELS_DIR")
+case "$MODELS_DIR" in /*) ;; *) MODELS_DIR="$ROOT/$MODELS_DIR" ;; esac
+mkdir -p "$MODELS_DIR" && cd "$MODELS_DIR" || exit 1
+echo "models folder: $MODELS_DIR"
 
 HF=https://huggingface.co
 WAN21=$HF/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files
@@ -40,6 +51,10 @@ for entry in "${FILES[@]}"; do
   read -r dir url <<<"$entry"
   name=$(basename "$url")
   mkdir -p "$dir"
+  if [ ! -e "$dir/$name" ] && [ -f "$OLD/$dir/$name.done" ] && [ "$OLD" != "$(pwd)" ]; then
+    echo "move  $name (from ComfyUI/models)"
+    mv "$OLD/$dir/$name" "$dir/$name" && mv "$OLD/$dir/$name.done" "$dir/$name.done"
+  fi
   if [ -f "$dir/$name.done" ]; then echo "skip  $name"; continue; fi
   echo "get   $name"
   for attempt in 1 2 3 4 5 6 7 8 9 10; do

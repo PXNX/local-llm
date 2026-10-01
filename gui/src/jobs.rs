@@ -202,6 +202,7 @@ fn run(ctx: &egui::Context, h: &JobHandle, l: Launch) -> State {
 
     let mut cmd = Command::new(&l.python);
     cmd.arg("-s").current_dir(&l.root).env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8").env("PYTHONUNBUFFERED", "1");
+    cmd.envs(crate::paths::current_env());
     let child = if l.console {
         cmd.arg(l.root.join("common").join("console_run.py")).arg(&l.script).args(&l.args);
         sys::new_console(&mut cmd);

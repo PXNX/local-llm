@@ -3,6 +3,7 @@ rem Setup after cloning: installs Ollama + OpenCode, ComfyUI portable (+ GGUF no
 rem and the OpenCode config. Safe to re-run. Models are downloaded afterwards by 0-download-all.bat.
 setlocal
 cd /d "%~dp0"
+call "%~dp0commonmodels-env.bat"
 set "COMFY_VER=v0.37.0"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
@@ -20,6 +21,9 @@ rem Large context with little VRAM (applies after Ollama restarts)
 setx OLLAMA_CONTEXT_LENGTH 32768 >nul
 setx OLLAMA_FLASH_ATTENTION 1 >nul
 setx OLLAMA_KV_CACHE_TYPE q8_0 >nul
+rem Ollama's models live in the one models folder (MODELS_DIR in .env, default models\), also for the tray app
+setx OLLAMA_MODELS "%OLLAMA_MODELS%" >nul
+echo Models folder: %MODELS_DIR%
 
 echo === OpenCode config
 if not exist "%USERPROFILE%\.config\opencode\opencode.json" (

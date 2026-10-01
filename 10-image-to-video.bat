@@ -9,6 +9,7 @@ rem     10-image-to-video.bat photo.jpg --size 640 --steps 15   (faster, lower q
 rem   Takes roughly 10-30 minutes per clip on the RTX 2060. Result: img2video\out\
 setlocal
 cd /d "%~dp0"
+call "%~dp0commonmodels-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"
 

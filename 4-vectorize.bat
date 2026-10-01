@@ -5,6 +5,7 @@ rem   Extra options are passed through, e.g.:
 rem     4-vectorize.bat logo.png --style logo --mode bw
 setlocal
 cd /d "%~dp0"
+call "%~dp0commonmodels-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
 rem ---- pick the image

@@ -13,6 +13,17 @@ setup.bat          & rem Ollama, OpenCode, ComfyUI portable + GGUF node + rembg,
 Not in git (installed by the scripts): `ComfyUI_windows_portable/` and all models.
 The OpenCode config template is `config/opencode.json`.
 
+All models live in **one folder**: `MODELS_DIR` in `.env` (empty = `models\` in this folder; GUI: Settings > Model
+storage). ComfyUI's folders (`checkpoints\`, `diffusion_models\`, `text_encoders\`, `vae\` ...) sit directly in it,
+the other tools in subfolders: `ollama\` (`OLLAMA_MODELS`), `huggingface\` (`HF_HOME`: OWLv2 + CLIP of the characters
+flow), `torch\` (`TORCH_HOME`: Demucs), `u2net\` (`U2NET_HOME`: rembg), `kokoro\` (comedy voices). Every `.bat` calls
+`common\models-env.bat`, the Python flows `common/storage.py` (via `import common`), and the GUI passes the same
+variables to Ollama, ComfyUI and the flows; `start-comfyui.bat` starts ComfyUI with `--models-directory` and still
+finds files left in `ComfyUI\models` (`config/comfyui-old-models.yaml`). `setup.bat` and the GUI also save
+`OLLAMA_MODELS` as a user variable, so restart the Ollama tray app once so it uses the folder too. Models from older
+setups (ComfyUI's own folder, `%USERPROFILE%\.ollama\models`, the Hugging Face / torch hub caches, `~\.u2net`,
+`comedy\models`) are offered to be moved on the GUI's Models page; `download-models.sh` moves ComfyUI files over by itself.
+
 ## GUI - one window for all flows (`gui/`)
 `local-llm.exe` runs every flow below with a form instead of command-line options. Download it from the
 [GitHub releases](https://github.com/PXNX/local-llm/releases) (built by `.github/workflows/gui.yml` on every
@@ -21,7 +32,7 @@ finds this folder next to itself or asks for it (and can clone it on a fresh PC)
 - **Start page**: setup checklist (ComfyUI/Python, NVIDIA driver >= 580, vision AI key, models, Telegram) with one-click fixes, a short line about what is running and CPU/RAM/GPU/VRAM usage.
 - **Queue**: one flow runs at a time (the GPU gets everything). "Add to queue" works on any flow at any time - also the running one, e.g. a second sticker batch with other input; each waiting run keeps the settings it was added with. The Queue page shows the running run (progress, ETA, cancel), the waiting runs (reorder, remove, clear) and the runs finished this session with their result; the top bar has one compact progress indicator that links there.
 - **Flows**: when a flow is picked, missing `.env` values and models are asked for right away. The Run area shows the Run / Add to queue button, how many runs of this flow are waiting, and the flow's latest run: progress (item x/y, ComfyUI sampler steps), elapsed time and ETA next to Cancel; every log line is timestamped and the run starts by logging its exact command line (also copyable); the log shows colors, and links / file paths in it are clickable (Top 5 prints the `t.me` link of every post).
-- **Models**: everything the flows need, what is on disk, resumable downloads with progress - ComfyUI checkpoints, Ollama models, and other local model files the flows manage themselves (e.g. the comedy flow's Kokoro TTS voices). Nothing is fetched twice: `.done` markers (same as `download-models.sh`), hard links for files that exist under another name, and ComfyUI files that are byte-identical to an Ollama blob are shared (sha256). ComfyUI and Ollama models can live in one folder on any drive (Settings > Model storage).
+- **Models**: everything the flows need, what is on disk, resumable downloads with progress - ComfyUI checkpoints, Ollama models, and other local model files the flows manage themselves (e.g. the comedy flow's Kokoro TTS voices). Nothing is fetched twice: `.done` markers (same as `download-models.sh`), hard links for files that exist under another name, and ComfyUI files that are byte-identical to an Ollama blob are shared (sha256). Everything is in the one models folder, on any drive (Settings > Model storage); files still in old places (ComfyUI's own folder, Ollama's default folder, the Hugging Face / torch / rembg caches, `comedy\models`, a previous models folder) are listed with a "Move them" button (instant on the same drive).
 - Starts Ollama/ComfyUI when a flow needs them (Ollama with low-VRAM settings), runs itself at below-normal priority and draws nothing while idle, so the models get the machine.
 - **Desktop shortcut**: Settings > Installation > *Create desktop shortcut* puts `local-llm.lnk` (with the app icon, started in this folder) on the Desktop, also a OneDrive-redirected one; `setup.bat` does the same when `gui\target\release\local-llm.exe` exists. The icon source is `gui/assets/icon.svg` (`gui/assets/make_icon.py` regenerates `icon.ico`/`icon.png`).
 - GUI settings live in `%APPDATA%\local-llm-gui\`, keys in the git-ignored `.env` - nothing private is committed.
@@ -186,7 +197,7 @@ fly_across, explode, hit = a drone/missile flies into its target, which explodes
 The cast is looked up in `caricatures\out\` (one file per expression, as flow 7 names them; things by name incl.
 sets like `caricatures\out\ww3\<thing>\cutout.png`); missing ones are drawn with FLUX.1 through
 `caricatures/make_caricatures.py` when ComfyUI runs and saved there for the next sketch, other backgrounds too
-(`comedy\cache\bg\`). Kokoro-82M (ONNX on the CPU, ~350 MB downloaded once to `comedy\models\`) gives every character
+(`comedy\cache\bg\`). Kokoro-82M (ONNX on the CPU, ~350 MB downloaded once to the models folder's `kokoro\`) gives every character
 its own voice and pitch (languages Kokoro can't speak use the Windows voices), lines are cached in `comedy\cache\tts\`.
 The renderer animates it as a cutout cartoon: squash & stretch driven by the voice, idle breathing, hard cuts
 with a slow push-in, screen shake, cartoon fireballs, flames and smoke. Frames are drawn in parallel processes
@@ -238,7 +249,7 @@ and Shahed/loitering-munition impacts; `patriot_launch` is an ignition transient
 flutter-modulated filtered-noise motor burn, for a Patriot interceptor launch. `slava_ukraini.wav`
 is not synthesized - it's silence-trimmed and normalized from a real recorded clip you supply, meant
 to play when a Flamingo cruise missile hits a Russian refinery. `--speech` runs the clip through
-HDemucs vocal separation (torchaudio, ~320 MB model downloaded once to the torch cache, GPU if
+HDemucs vocal separation (torchaudio, ~320 MB model downloaded once to the models folder's `torch\`, GPU if
 available), then an 80 Hz high-pass against rumble/hum and a spectral noise gate whose noise
 profile is estimated from the quietest frames of each frequency band, then silence-trim + normalize.
 Apart from Demucs, no AI model or ComfyUI/Ollama server involved; add a generative audio model (e.g. Stable Audio Open in ComfyUI) later if more
@@ -254,9 +265,9 @@ https://www.nvidia.com/Download/index.aspx  (GeForce > RTX 20 Series (Notebooks)
 or via the NVIDIA App. Reboot, then check with `nvidia-smi`.
 
 ### 2. Models
-`download-models.sh` (Git Bash) downloads everything into
-`ComfyUI_windows_portable/ComfyUI/models`. It's safe to re-run: finished files are
-skipped and partial files resume. Log: `download-models.log`.
+`download-models.sh` (Git Bash) downloads everything into the models folder (`MODELS_DIR`, default
+`models/`). It's safe to re-run: finished files are skipped, partial files resume and files still in
+`ComfyUI_windows_portable/ComfyUI/models` are moved over. Log: `download-models.log`.
 
 | Tier | Purpose | Files |
 |---|---|---|

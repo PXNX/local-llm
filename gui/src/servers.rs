@@ -1,12 +1,13 @@
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 
+use crate::paths;
 use crate::sys;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -82,13 +83,6 @@ impl Servers {
     }
 }
 
-/// Models folder Ollama is started with (None = its default / the user's OLLAMA_MODELS).
-static OLLAMA_MODELS: Mutex<Option<PathBuf>> = Mutex::new(None);
-
-pub fn set_ollama_models(dir: Option<PathBuf>) {
-    *OLLAMA_MODELS.lock().unwrap() = dir;
-}
-
 /// Low-VRAM defaults (as in setup.bat) so Ollama and ComfyUI fit next to each other on a small GPU;
 /// values the user set in the environment win.
 const OLLAMA_ENV: &[(&str, &str)] =
@@ -111,9 +105,7 @@ pub fn start(server: Server, root: &Path) -> Result<(), String> {
                     cmd.env(k, v);
                 }
             }
-            if let Some(dir) = OLLAMA_MODELS.lock().unwrap().clone() {
-                cmd.env("OLLAMA_MODELS", dir);
-            }
+            cmd.envs(paths::current_env());
             sys::hide_window(&mut cmd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
             cmd.spawn().map(drop).map_err(|e| format!("could not start Ollama ({e}) - is it installed? (setup.bat)"))
         }
@@ -129,7 +121,7 @@ pub fn start(server: Server, root: &Path) -> Result<(), String> {
                 use std::os::windows::process::CommandExt;
                 cmd.raw_arg(format!("/C start \"ComfyUI\" /min /normal \"{}\"", bat.display()));
             }
-            sys::hide_window(&mut cmd).current_dir(root);
+            sys::hide_window(&mut cmd).current_dir(root).envs(paths::current_env());
             cmd.spawn().map(drop).map_err(|e| format!("could not start ComfyUI: {e}"))
         }
     }
@@ -167,11 +159,4 @@ pub fn stop_ollama() {
 
 pub fn ollama_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default().join("Programs").join("Ollama")
-}
-
-/// OLLAMA_MODELS from the environment, else Ollama's default folder.
-pub fn ollama_default_dir() -> PathBuf {
-    std::env::var_os("OLLAMA_MODELS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default().join(".ollama").join("models"))
 }
