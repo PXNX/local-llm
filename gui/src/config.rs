@@ -7,6 +7,8 @@ use crate::flows::{FlowId, Forms};
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Page {
     Flow(FlowId),
+    /// running, waiting and recently finished runs
+    Queue,
     Models,
     Settings,
     /// also where an unknown saved page (older versions) lands

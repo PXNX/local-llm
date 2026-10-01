@@ -12,7 +12,7 @@ use crate::sys;
 use crate::ui::{self, AMBER, GREEN};
 
 impl App {
-    /// Start page: what is missing, what runs/waits, how the machine is doing.
+    /// Start page: what runs (short), what is missing, how the machine is doing.
     pub(super) fn home_page(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.heading("Start");
@@ -20,9 +20,8 @@ impl App {
                 RichText::new("Pick something to make on the left. Anything still missing is listed here - one click fixes it.").weak(),
             );
             ui.add_space(10.0);
+            self.queue_summary(ui);
             self.checklist(ui);
-            ui.add_space(10.0);
-            self.queue_section(ui);
             ui.add_space(10.0);
             self.health_section(ui);
         });

@@ -42,11 +42,13 @@ pub struct App {
     /// Only one flow runs at a time (GPU); the rest waits here and runs in order.
     running: Option<FlowId>,
     queue: VecDeque<(FlowId, Launch)>,
+    /// Runs started this session, newest first (the running one included), for the Queue page.
+    recent: VecDeque<(FlowId, JobHandle)>,
     /// Flow whose setup dialog is open.
     prompt: Option<FlowId>,
     prompted: Option<FlowId>,
-    /// Flow whose "cancel this run?" dialog is open.
-    confirm_cancel: Option<FlowId>,
+    /// Run whose "cancel this run?" dialog is open (the handle, so a run started meanwhile isn't hit).
+    confirm_cancel: Option<(FlowId, JobHandle)>,
     /// "Quit while a flow is running?" dialog is open.
     confirm_quit: bool,
     /// Set right before re-sending the close command, so that close isn't intercepted a second time.
@@ -83,6 +85,7 @@ impl App {
             jobs: HashMap::new(),
             running: None,
             queue: VecDeque::new(),
+            recent: VecDeque::new(),
             prompt: None,
             prompted: None,
             confirm_cancel: None,
@@ -176,8 +179,18 @@ impl App {
         }
         self.running = None;
         if let Some((id, launch)) = self.queue.pop_front() {
-            self.jobs.insert(id, jobs::start(&self.ctx, launch));
+            let h = jobs::start(&self.ctx, launch);
+            self.recent.push_front((id, h.clone()));
+            self.recent.truncate(MAX_RECENT);
+            self.jobs.insert(id, h);
             self.running = Some(id);
+        }
+    }
+
+    /// Asks before cancelling the flow's running run.
+    fn ask_cancel(&mut self, id: FlowId) {
+        if let Some(h) = self.jobs.get(&id).filter(|h| h.job.lock().unwrap().running()) {
+            self.confirm_cancel = Some((id, h.clone()));
         }
     }
 
@@ -274,23 +287,31 @@ impl App {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !self.queue.is_empty()
-                    && ui.link(format!("+{} queued", self.queue.len())).on_hover_text("see the queue on Start").clicked()
-                {
-                    self.select(Page::Home);
-                }
-                if let Some((id, h)) = self.running_job() {
+                // one compact indicator for the whole queue; details on the Queue page
+                let waiting = match self.queue.len() {
+                    0 => String::new(),
+                    n => format!(" · +{n} queued"),
+                };
+                if let Some((_, h)) = self.running_job() {
                     let mut j = h.job.lock().unwrap();
                     let frac = j.progress.fraction();
                     let eta = j.eta();
-                    let text =
-                        format!("{} {}{}", j.title, mmss(j.elapsed()), eta.map(|e| format!(" · {} left", mmss(e))).unwrap_or_default());
+                    let text = format!(
+                        "{} {}{}{waiting}",
+                        j.title,
+                        mmss(j.elapsed()),
+                        eta.map(|e| format!(" · {} left", mmss(e))).unwrap_or_default()
+                    );
                     drop(j);
-                    let bar = egui::ProgressBar::new(frac.unwrap_or(0.0)).desired_width(260.0).text(text).animate(frac.is_none());
-                    if ui.add(bar).on_hover_text("open the running flow").clicked() {
-                        self.select(Page::Flow(id));
+                    let bar = egui::ProgressBar::new(frac.unwrap_or(0.0)).desired_width(300.0).text(text).animate(frac.is_none());
+                    // a progress bar only senses hover by itself
+                    let bar = ui.add(bar).interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if bar.on_hover_text("open the queue").clicked() {
+                        self.select(Page::Queue);
                     }
                     ui.ctx().request_repaint_after(Duration::from_secs(1));
+                } else if !self.queue.is_empty() && ui.link(format!("{} queued", self.queue.len())).clicked() {
+                    self.select(Page::Queue);
                 }
                 if let Some(r) = &self.repo
                     && r.models.busy()
@@ -313,9 +334,17 @@ impl App {
                 .min_size(egui::vec2(ui.available_width(), 28.0));
             ui.add(b).clicked()
         };
-        let start = if self.queue.is_empty() { "Start".to_owned() } else { format!("Start  ({} queued)", self.queue.len()) };
-        if nav_item(ui, self.cfg.page == Page::Home, icons::HOME, &start) {
+        if nav_item(ui, self.cfg.page == Page::Home, icons::HOME, "Start") {
             clicked = Some(Page::Home);
+        }
+        let queue = match (self.running.is_some(), self.queue.len()) {
+            (false, 0) => "Queue".to_owned(),
+            (true, 0) => "Queue  ▶".to_owned(),
+            (false, n) => format!("Queue  ⏳{n}"),
+            (true, n) => format!("Queue  ▶ ⏳{n}"),
+        };
+        if nav_item(ui, self.cfg.page == Page::Queue, icons::PLAYLIST_PLAY, &queue) {
+            clicked = Some(Page::Queue);
         }
         ui.add_space(4.0);
         ui.label(RichText::new("CREATE").small().weak());
@@ -391,6 +420,8 @@ impl App {
     }
 }
 
+const MAX_RECENT: usize = 20;
+
 pub fn mmss(d: Duration) -> String {
     let s = d.as_secs();
     if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
@@ -453,6 +484,7 @@ impl eframe::App for App {
             match self.cfg.page {
                 Page::Home => self.home_page(ui),
                 Page::Flow(id) => self.flow_page(ui, id),
+                Page::Queue => self.queue_page(ui),
                 Page::Models => self.models_page(ui),
                 Page::Settings => self.settings_page(ui),
             }
@@ -461,9 +493,9 @@ impl eframe::App for App {
             let ctx = ui.ctx().clone();
             self.setup_dialog(&ctx, id);
         }
-        if let Some(id) = self.confirm_cancel {
+        if self.confirm_cancel.is_some() {
             let ctx = ui.ctx().clone();
-            self.confirm_cancel_dialog(&ctx, id);
+            self.confirm_cancel_dialog(&ctx);
         }
         if self.confirm_quit {
             let ctx = ui.ctx().clone();
