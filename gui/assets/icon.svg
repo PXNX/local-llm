@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4F8DFF"/>
+      <stop offset="0.55" stop-color="#6A4DF5"/>
+      <stop offset="1" stop-color="#9B2FE0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.42" cy="0.58" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <rect x="9.5" y="9.5" width="237" height="237" rx="54.5" fill="none" stroke="#1B1060" stroke-opacity="0.35" stroke-width="3"/>
+  <g id="detail">
+    <circle cx="108" cy="148" r="92" fill="url(#glow)"/>
+    <path d="M108 60 Q121 135 196 148 Q121 161 108 236 Q95 161 20 148 Q95 135 108 60 Z" fill="#2A1470" fill-opacity="0.30" transform="translate(5 6)"/>
+    <circle cx="200" cy="196" r="11" fill="#FFFFFF" fill-opacity="0.85"/>
+  </g>
+  <path d="M108 60 Q121 135 196 148 Q121 161 108 236 Q95 161 20 148 Q95 135 108 60 Z" fill="#FFFFFF"/>
+  <path d="M186 28 Q192 62 226 68 Q192 74 186 108 Q180 74 146 68 Q180 62 186 28 Z" fill="#FFC83D"/>
+</svg>

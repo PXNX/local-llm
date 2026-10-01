@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(windows)]
@@ -66,6 +66,25 @@ pub fn setx(key: &str, value: &str) -> Result<(), String> {
         Ok(s) => Err(format!("setx failed ({s})")),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Creates (or overwrites) `local-llm.lnk` on the user's Desktop, also when it is redirected (OneDrive).
+pub fn create_desktop_shortcut(exe: &Path, work_dir: &Path) -> Result<PathBuf, String> {
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'local-llm.lnk'; \
+        $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk); \
+        $s.TargetPath = $env:LLM_EXE; $s.WorkingDirectory = $env:LLM_DIR; $s.IconLocation = $env:LLM_EXE + ',0'; \
+        $s.Description = 'local-llm'; $s.Save(); Write-Output $lnk";
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT])
+        .env("LLM_EXE", exe)
+        .env("LLM_DIR", work_dir)
+        .stdin(std::process::Stdio::null());
+    let out = hide_window(&mut cmd).output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+    }
+    Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
 }
 
 /// Wall-clock "HH:MM:SS" for log lines, in the machine's local time zone.
