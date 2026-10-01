@@ -3,6 +3,7 @@ rem Flow 3: local coding LLM. Starts Ollama, preloads the model and opens T3 Cod
 rem   Other model:  3-coding-llm-t3code.bat gpt-oss:20b     (or qwen3-coder:30b, qwen3.8-blend:27b)
 rem   Terminal instead of T3 Code:  3-coding-llm-t3code.bat qwen3:8b cli
 setlocal
+call "%~dp0commonmodels-env.bat"
 set "MODEL=%~1"
 if "%MODEL%"=="" set "MODEL=qwen3:8b"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"

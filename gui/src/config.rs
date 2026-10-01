@@ -21,19 +21,29 @@ pub enum Page {
 #[serde(default)]
 pub struct Config {
     pub repo: Option<PathBuf>,
-    /// Custom ComfyUI models folder (registered via extra_model_paths.yaml); None = ComfyUI/models.
+    /// Older versions' custom ComfyUI folder: moved to MODELS_DIR in .env on start, then None.
     pub models_dir: Option<PathBuf>,
-    /// Custom Ollama models folder (OLLAMA_MODELS); None = Ollama's default.
+    /// Older versions' custom Ollama folder: becomes `ollama_prev` on start, then None.
     pub ollama_dir: Option<PathBuf>,
-    /// Where Ollama's models were before the folder was changed, until they are moved.
+    /// An old Ollama folder whose models are offered to be moved into the models folder.
     pub ollama_prev: Option<PathBuf>,
+    /// The models folder before it was changed, until its files are moved.
+    pub models_prev: Option<PathBuf>,
     pub page: Page,
     pub forms: Forms,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { repo: None, models_dir: None, ollama_dir: None, ollama_prev: None, page: Page::Home, forms: Forms::default() }
+        Self {
+            repo: None,
+            models_dir: None,
+            ollama_dir: None,
+            ollama_prev: None,
+            models_prev: None,
+            page: Page::Home,
+            forms: Forms::default(),
+        }
     }
 }
 

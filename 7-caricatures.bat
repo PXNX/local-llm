@@ -8,6 +8,7 @@ rem   Drag & drop a photo onto this file to caricature that person.
 rem   Result: caricatures\out\<name>\
 setlocal
 cd /d "%~dp0"
+call "%~dp0commonmodels-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"
 

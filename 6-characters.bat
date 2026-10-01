@@ -5,6 +5,7 @@ rem     6-characters.bat https://www.youtube.com/@freeonis/videos --max-videos 2
 rem   Characters to collect: characters\names.txt. Result: characters\out\<name>\
 setlocal
 cd /d "%~dp0"
+call "%~dp0commonmodels-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
 if "%~1"=="" (

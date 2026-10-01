@@ -13,6 +13,7 @@ rem   bug, see stickers\make_stickers.py). --engine photomaker needs models\phot
 rem   and only works once SDXL is fixed.
 setlocal
 cd /d "%~dp0"
+call "%~dp0commonmodels-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"
 

@@ -23,13 +23,15 @@ import re
 import sys
 from pathlib import Path
 
-import av
-import numpy as np
-import torch
-from PIL import Image
-from sklearn.cluster import AgglomerativeClustering
-from torchvision.ops import nms
-from transformers import CLIPModel, CLIPProcessor, Owlv2ForObjectDetection, Owlv2Processor
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import common  # noqa: E402,F401  (before transformers: HF_HOME = the models folder)
+import av  # noqa: E402
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from PIL import Image  # noqa: E402
+from sklearn.cluster import AgglomerativeClustering  # noqa: E402
+from torchvision.ops import nms  # noqa: E402
+from transformers import CLIPModel, CLIPProcessor, Owlv2ForObjectDetection, Owlv2Processor  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 DETECTOR = "google/owlv2-base-patch16-ensemble"

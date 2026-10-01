@@ -7,6 +7,7 @@ rem     9-top5-videos.bat --topic cute --subject animals
 rem     9-top5-videos.bat --topic funny --hours 48 --format landscape
 setlocal
 cd /d "%~dp0"
+call "%~dp0commonmodels-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"
 

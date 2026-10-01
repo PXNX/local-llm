@@ -4,6 +4,9 @@
 //! - a finished file gets a `<file>.done` marker, the same convention as download-models.sh;
 //! - a file already on disk under its upstream name or in another models folder is hard-linked;
 //! - ComfyUI files and Ollama blobs with the same sha256 are hard-linked into one copy.
+//!
+//! Everything lives in one models folder (`paths::models_env`); files the tools stored elsewhere before
+//! are offered to be moved into it.
 
 mod download;
 mod store;
@@ -18,7 +21,9 @@ use std::time::Duration;
 use eframe::egui;
 use serde::Deserialize;
 
-pub use store::{remove_extra_paths, write_extra_paths};
+use crate::paths::OldStore;
+
+pub use store::remove_extra_paths;
 
 const EMBEDDED: &str = include_str!("../../../models.json");
 
@@ -56,7 +61,7 @@ pub struct OllamaModel {
 }
 
 /// A model file that is neither a ComfyUI weight nor an Ollama model - e.g. the comedy flow's
-/// Kokoro TTS voices - kept in one repo-relative folder instead of the configurable model roots.
+/// Kokoro TTS voices - kept in a subfolder `dir` of the models folder.
 #[derive(Deserialize, Clone)]
 pub struct LocalModel {
     pub id: String,
@@ -66,6 +71,9 @@ pub struct LocalModel {
     pub file: String,
     pub size: Option<u64>,
     pub url: Option<String>,
+    /// Repo-relative folder of older versions, still used until the file is moved.
+    #[serde(default)]
+    pub legacy_dir: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -126,6 +134,15 @@ pub enum Task {
     Share,
 }
 
+/// A file of an old store and its place in the models folder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Move {
+    pub label: &'static str,
+    pub from: PathBuf,
+    pub to: PathBuf,
+    pub size: u64,
+}
+
 #[derive(Clone, Default)]
 pub struct Moving {
     pub done: u64,
@@ -142,6 +159,9 @@ struct Shared {
     dl: HashMap<String, (Dl, Arc<AtomicBool>)>,
     roots: Vec<PathBuf>,
     ollama_dir: PathBuf,
+    local_dir: PathBuf,
+    old: Vec<OldStore>,
+    plan: Vec<Move>,
     token: String,
     scan_again: bool,
     scanning: bool,
@@ -187,11 +207,14 @@ impl Models {
         m
     }
 
-    /// `roots[0]` receives new ComfyUI downloads; all roots are searched so nothing is fetched twice.
-    pub fn configure(&self, roots: Vec<PathBuf>, ollama_dir: PathBuf, token: String) {
+    /// `roots[0]` (the models folder) receives new ComfyUI downloads; all roots are searched so nothing
+    /// is fetched twice. Local models go below `local_dir`, `old` stores are offered to be moved.
+    pub fn configure(&self, roots: Vec<PathBuf>, ollama_dir: PathBuf, local_dir: PathBuf, old: Vec<OldStore>, token: String) {
         let mut s = self.shared.lock().unwrap();
         s.roots = roots;
         s.ollama_dir = ollama_dir;
+        s.local_dir = local_dir;
+        s.old = old;
         s.token = token;
     }
 
@@ -292,15 +315,17 @@ impl Models {
         let m = self.clone();
         std::thread::spawn(move || {
             loop {
-                let (roots, odir, tracked) = {
+                let (roots, odir, local, old, tracked) = {
                     let s = m.shared.lock().unwrap();
                     let tracked: Vec<String> = s.status.keys().filter(|k| k.starts_with("ollama:")).cloned().collect();
-                    (s.roots.clone(), s.ollama_dir.clone(), tracked)
+                    (s.roots.clone(), s.ollama_dir.clone(), s.local_dir.clone(), s.old.clone(), tracked)
                 };
-                let (status, share) = m.scan(&roots, &odir, tracked);
+                let (status, share) = m.scan(&roots, &odir, &local, tracked);
+                let plan = plan_moves(&old);
                 let mut s = m.shared.lock().unwrap();
                 s.status = status;
                 s.share = share;
+                s.plan = plan;
                 if !std::mem::take(&mut s.scan_again) {
                     s.scanning = false;
                     break;
@@ -310,7 +335,13 @@ impl Models {
         });
     }
 
-    fn scan(&self, roots: &[PathBuf], odir: &Path, tracked: Vec<String>) -> (HashMap<String, Status>, HashMap<String, Share>) {
+    fn scan(
+        &self,
+        roots: &[PathBuf],
+        odir: &Path,
+        local: &Path,
+        tracked: Vec<String>,
+    ) -> (HashMap<String, Status>, HashMap<String, Share>) {
         let installed = store::scan_ollama(odir);
         let owner = |sha: &str| installed.iter().find(|(_, o)| o.weights.as_deref() == Some(sha)).map(|(n, _)| n.clone());
         let mut status = HashMap::new();
@@ -355,7 +386,7 @@ impl Models {
             status.insert(id, st);
         }
         for m in self.local.iter() {
-            status.insert(m.id.clone(), scan_local(m, &self.repo));
+            status.insert(m.id.clone(), scan_local(m, local, &self.repo));
         }
         (status, share)
     }
@@ -375,46 +406,25 @@ impl Models {
         self.shared.lock().unwrap().moving.clone()
     }
 
-    /// ComfyUI files outside the download folder, plus Ollama files outside the configured Ollama folder.
-    pub fn move_plan(&self, ollama_from: Option<&Path>) -> Vec<(PathBuf, PathBuf)> {
-        let s = self.shared.lock().unwrap();
-        let Some(target) = s.roots.first().cloned() else { return Vec::new() };
-        let mut plan = Vec::new();
-        for c in self.comfy.iter() {
-            if let Some(Status::Present(p)) = s.status.get(&c.id)
-                && !p.starts_with(&target)
-            {
-                plan.push((p.clone(), target.join(&c.dir).join(&c.file)));
-            }
-        }
-        if let Some(from) = ollama_from.filter(|f| *f != s.ollama_dir && f.is_dir()) {
-            for sub in ["blobs", "manifests"] {
-                for f in store::files_below(&from.join(sub)) {
-                    let rel = f.strip_prefix(from).expect("below").to_path_buf();
-                    plan.push((f, s.ollama_dir.join(rel)));
-                }
-            }
-        }
-        plan
+    /// Files still in the old stores (found by the last scan).
+    pub fn move_plan(&self) -> Vec<Move> {
+        self.shared.lock().unwrap().plan.clone()
     }
 
-    pub fn start_move(&self, plan: Vec<(PathBuf, PathBuf)>) {
-        let total = plan.iter().map(|(s, _)| fs::metadata(s).map_or(0, |m| m.len())).sum();
+    pub fn start_move(&self, plan: Vec<Move>) {
+        let total = plan.iter().map(|m| m.size).sum();
         self.shared.lock().unwrap().moving = Some(Moving { total, ..Default::default() });
         let m = self.clone();
         std::thread::spawn(move || {
             let (done, stop) = (AtomicU64::new(0), AtomicBool::new(false));
-            for (src, dst) in plan {
-                let name = src.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            for Move { from, to, .. } in plan {
+                let name = from.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 if let Some(mv) = &mut m.shared.lock().unwrap().moving {
                     mv.file = name.clone();
                 }
                 m.ctx.request_repaint();
-                let result = store::move_file(&src, &dst, &done, &stop);
-                let marker = done_marker(&src);
-                if result.is_ok() && marker.exists() {
-                    let _ = fs::rename(&marker, done_marker(&dst));
-                }
+                // `.done` markers are files of the store too and move along
+                let result = store::move_file(&from, &to, &done, &stop);
                 let mut s = m.shared.lock().unwrap();
                 if let Some(mv) = &mut s.moving {
                     mv.done = done.load(Ordering::Relaxed);
@@ -530,10 +540,10 @@ impl Models {
         Ok(())
     }
 
-    /// A file kept in one fixed repo-relative folder (e.g. the comedy flow's Kokoro voices): no roots,
+    /// A file in a subfolder of the models folder (e.g. the comedy flow's Kokoro voices): no roots,
     /// no gating, no cross-tool linking.
     fn fetch_local(&self, model: &LocalModel, replace: bool, stop: &Arc<AtomicBool>) -> Result<(), String> {
-        let dir = self.repo.join(&model.dir);
+        let dir = self.shared.lock().unwrap().local_dir.join(&model.dir);
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let dest = dir.join(&model.file);
         let url = model.url.clone().ok_or("no download URL - copy the file in by hand")?;
@@ -613,10 +623,11 @@ fn scan_comfy(m: &ComfyModel, roots: &[PathBuf]) -> Status {
     Status::Missing { partial }
 }
 
-/// Like `scan_comfy`, but for a file kept in one fixed repo-relative folder (no other roots, no linking).
-fn scan_local(m: &LocalModel, repo: &Path) -> Status {
-    let dir = repo.join(&m.dir);
-    let path = dir.join(&m.file);
+/// Like `scan_comfy`, but for a file in one subfolder of the models folder (or its old repo folder).
+fn scan_local(m: &LocalModel, local: &Path, repo: &Path) -> Status {
+    let dir = local.join(&m.dir);
+    let old = m.legacy_dir.as_ref().map(|d| repo.join(d).join(&m.file)).filter(|p| p.is_file() && !dir.join(&m.file).is_file());
+    let path = old.unwrap_or_else(|| dir.join(&m.file));
     if let Ok(meta) = fs::metadata(&path) {
         let size = meta.len();
         let done = done_marker(&path).exists();
@@ -633,6 +644,20 @@ fn scan_local(m: &LocalModel, repo: &Path) -> Status {
     }
     let partial = fs::metadata(dir.join(format!("{}.part", m.file))).map_or(0, |m| m.len());
     Status::Missing { partial }
+}
+
+/// Every file of the old stores with its place in the models folder (not ComfyUI's empty `put_..._here` placeholders).
+fn plan_moves(old: &[OldStore]) -> Vec<Move> {
+    let placeholder = |f: &Path| f.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("put_") && n.ends_with("_here"));
+    let mut plan = Vec::new();
+    for s in old {
+        for f in store::files_below(&s.from).into_iter().filter(|f| !placeholder(f)) {
+            let to = s.to.join(f.strip_prefix(&s.from).expect("below"));
+            let size = fs::metadata(&f).map_or(0, |m| m.len());
+            plan.push(Move { label: s.label, from: f, to, size });
+        }
+    }
+    plan
 }
 
 /// The same file under its upstream name, or in another models folder, with the right size.
@@ -755,24 +780,62 @@ mod tests {
         m.ollama = Arc::new(vec![OllamaModel { model: "tiny:1b".into(), group: String::new(), used_by: String::new(), size: Some(5) }]);
         let roots = vec![comfy.clone()];
 
-        let (st, _) = m.scan(&roots, &ollama, Vec::new());
+        let (st, _) = m.scan(&roots, &ollama, &comfy, Vec::new());
         assert!(matches!(st["tiny.gguf"], Status::Linkable(_)), "missing ComfyUI file links to the Ollama blob");
         assert_eq!(st["ollama:tiny:1b"], Status::Present(ollama.join("manifests")));
 
         fs::create_dir_all(comfy.join("vae")).unwrap();
         fs::write(comfy.join("vae/tiny.gguf"), b"hello").unwrap();
-        let (_, share) = m.scan(&roots, &ollama, Vec::new());
+        let (_, share) = m.scan(&roots, &ollama, &comfy, Vec::new());
         assert!(matches!(share["tiny.gguf"], Share::Duplicate { .. }));
 
-        m.configure(roots.clone(), ollama.clone(), String::new());
+        m.configure(roots.clone(), ollama.clone(), comfy.clone(), Vec::new(), String::new());
         {
             let mut s = m.shared.lock().unwrap();
             s.status.insert("tiny.gguf".into(), Status::Present(comfy.join("vae/tiny.gguf")));
             s.share = share;
         }
         m.share_copies("tiny.gguf", &AtomicBool::new(false)).unwrap();
-        let (_, share) = m.scan(&roots, &ollama, Vec::new());
+        let (_, share) = m.scan(&roots, &ollama, &comfy, Vec::new());
         assert!(matches!(share["tiny.gguf"], Share::Shared(_)), "{share:?}");
         assert!(matches!(share["ollama:tiny:1b"], Share::Shared(_)));
+    }
+
+    #[test]
+    fn local_models_and_old_stores() {
+        let repo = tmp("local-repo");
+        let dir = tmp("local-models");
+        let m = LocalModel {
+            id: "voice".into(),
+            group: String::new(),
+            used_by: String::new(),
+            dir: "kokoro".into(),
+            file: "v.bin".into(),
+            size: Some(4),
+            url: Some("https://x/v.bin".into()),
+            legacy_dir: Some("comedy/models".into()),
+        };
+        assert_eq!(scan_local(&m, &dir, &repo), Status::Missing { partial: 0 });
+        write(&repo.join("comedy/models/v.bin"), 4);
+        assert_eq!(scan_local(&m, &dir, &repo), Status::Present(repo.join("comedy/models/v.bin")), "old folder still counts");
+
+        let comfy = repo.join("ComfyUI/models");
+        write(&comfy.join("vae/a.bin"), 3);
+        write(&comfy.join("vae/put_vae_here"), 0);
+        let old = vec![
+            OldStore { label: "ComfyUI", from: comfy.clone(), to: dir.clone() },
+            OldStore { label: "Kokoro", from: repo.join("comedy/models"), to: dir.join("kokoro") },
+        ];
+        let mut plan = plan_moves(&old);
+        plan.sort_by(|a, b| a.to.cmp(&b.to));
+        let got: Vec<(&str, PathBuf, u64)> = plan.iter().map(|p| (p.label, p.to.clone(), p.size)).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Kokoro", dir.join("kokoro/v.bin"), 4),
+                ("Kokoro", dir.join("kokoro/v.bin.done"), 0),
+                ("ComfyUI", dir.join("vae/a.bin"), 3)
+            ]
+        );
     }
 }

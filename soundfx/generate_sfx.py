@@ -8,11 +8,15 @@ synthesized: it is trimmed/normalized from a real recorded clip you supply. --sp
 ~320 MB, downloaded once) followed by a high-pass and a spectral noise gate.
 """
 import argparse
+import sys
 import wave
 from pathlib import Path
 
 import numpy as np
 from scipy import ndimage, signal
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import common  # noqa: E402,F401  (torch hub downloads Demucs into the models folder: TORCH_HOME)
 
 SR = 44100
 

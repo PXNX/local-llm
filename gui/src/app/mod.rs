@@ -111,25 +111,59 @@ impl App {
         let models = Models::new(&self.ctx, &root);
         self.cfg.repo = Some(root);
         self.repo = Some(Repo { paths, env, models });
+        self.migrate_model_folders();
         self.configure_models();
         self.env_edit.clear();
     }
 
-    fn ollama_dir(&self) -> PathBuf {
-        self.cfg.ollama_dir.clone().unwrap_or_else(servers::ollama_default_dir)
+    /// Older versions kept separate ComfyUI/Ollama folders in the GUI config: the ComfyUI one becomes
+    /// MODELS_DIR, the Ollama one an old store whose files are offered to be moved.
+    fn migrate_model_folders(&mut self) {
+        let Some(r) = &mut self.repo else { return };
+        let comfy = self.cfg.models_dir.take();
+        if let Some(o) = self.cfg.ollama_dir.take() {
+            self.cfg.ollama_prev.get_or_insert(o);
+        }
+        if let Some(d) = comfy
+            && !r.env.is_set(paths::MODELS_KEY)
+        {
+            r.env.set(paths::MODELS_KEY, &d.display().to_string());
+            if let Err(e) = r.env.save() {
+                self.notify(format!("Could not write .env: {e}"), true);
+            }
+        }
     }
 
-    /// New downloads go to the custom folder if set; all folders are searched so nothing is fetched twice.
+    /// The one folder for every model (MODELS_DIR in .env, default <repo>/models).
+    fn models_dir(&self) -> PathBuf {
+        self.repo.as_ref().map(|r| r.paths.models(&r.env.get(paths::MODELS_KEY))).unwrap_or_default()
+    }
+
+    /// Points servers, flows and the Models page at the models folder. ComfyUI's own folder stays a
+    /// second root until its files are moved, so nothing is fetched twice.
     fn configure_models(&self) {
+        static EXPORTED: Mutex<Option<PathBuf>> = Mutex::new(None);
         let Some(r) = &self.repo else { return };
-        servers::set_ollama_models(self.cfg.ollama_dir.clone());
-        let default = r.paths.default_models();
-        let mut roots = Vec::new();
-        if let Some(custom) = self.cfg.models_dir.clone().filter(|c| *c != default) {
-            roots.push(custom);
+        let dir = self.models_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        paths::set_models(&dir);
+        let ollama = dir.join(paths::OLLAMA);
+        // Ollama started outside the GUI (tray app, autostart) reads the user environment
+        let mut exported = EXPORTED.lock().unwrap();
+        if exported.as_ref() != Some(&ollama) && std::env::var_os("OLLAMA_MODELS").is_none_or(|v| v != ollama) {
+            let _ = crate::sys::setx("OLLAMA_MODELS", &ollama.display().to_string());
         }
-        roots.push(default);
-        r.models.configure(roots, self.ollama_dir(), r.env.get("HF_TOKEN"));
+        *exported = Some(ollama.clone());
+        drop(exported);
+        crate::models::remove_extra_paths(&r.paths.comfy());
+        let mut roots = vec![dir.clone()];
+        if r.paths.comfy_models() != dir {
+            roots.push(r.paths.comfy_models());
+        }
+        let home = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_default();
+        let prev = paths::Previous { models: self.cfg.models_prev.as_deref(), ollama: self.cfg.ollama_prev.as_deref() };
+        let old = paths::old_stores(&r.paths, &dir, &home, |k| std::env::var_os(k).map(PathBuf::from), prev);
+        r.models.configure(roots, ollama, dir, old, r.env.get("HF_TOKEN"));
         r.models.track(&ollama_id(&self.llm().ollama_model));
         r.models.rescan();
     }

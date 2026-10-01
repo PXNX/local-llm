@@ -188,35 +188,8 @@ pub fn move_file(src: &Path, dst: &Path, done: &AtomicU64, stop: &AtomicBool) ->
 
 const MARK: &str = "# written by the local-llm GUI";
 
-/// Makes ComfyUI also load models from a custom folder (ComfyUI/extra_model_paths.yaml).
-pub fn write_extra_paths(comfy: &Path, models_dir: &Path) -> Result<(), String> {
-    let file = comfy.join("extra_model_paths.yaml");
-    if let Ok(existing) = fs::read_to_string(&file)
-        && !existing.starts_with(MARK)
-    {
-        return Err(format!("{} exists and was not written by this app - add the folder there by hand", file.display()));
-    }
-    let base = models_dir.display().to_string().replace('\\', "/");
-    let dirs = [
-        "checkpoints",
-        "diffusion_models",
-        "unet",
-        "text_encoders",
-        "clip",
-        "vae",
-        "loras",
-        "photomaker",
-        "upscale_models",
-        "controlnet",
-        "clip_vision",
-    ];
-    let mut yaml = format!("{MARK}\nlocal_llm:\n    base_path: \"{base}\"\n");
-    for d in dirs {
-        yaml.push_str(&format!("    {d}: {d}\n"));
-    }
-    fs::write(&file, yaml).map_err(|e| e.to_string())
-}
-
+/// Removes the ComfyUI/extra_model_paths.yaml older GUI versions wrote: start-comfyui.bat now passes
+/// `--models-directory` (the models folder) itself.
 pub fn remove_extra_paths(comfy: &Path) {
     let file = comfy.join("extra_model_paths.yaml");
     if fs::read_to_string(&file).is_ok_and(|t| t.starts_with(MARK)) {

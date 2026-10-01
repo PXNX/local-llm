@@ -76,10 +76,10 @@
   ],
   "local": [
     { "id": "kokoro-onnx", "group": "Kokoro-82M (comedy voices)", "used_by": "Comedy",
-      "dir": "comedy/models", "file": "kokoro-v1.0.onnx", "size": 325532387,
+      "dir": "kokoro", "legacy_dir": "comedy/models", "file": "kokoro-v1.0.onnx", "size": 325532387,
       "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx" },
     { "id": "kokoro-voices", "group": "Kokoro-82M (comedy voices)", "used_by": "Comedy",
-      "dir": "comedy/models", "file": "voices-v1.0.bin", "size": 28214398,
+      "dir": "kokoro", "legacy_dir": "comedy/models", "file": "voices-v1.0.bin", "size": 28214398,
       "url": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin" }
   ]
 }

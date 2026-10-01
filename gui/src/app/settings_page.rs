@@ -9,9 +9,8 @@ use crate::envfile::{self, EnvVar};
 use crate::flows::Provider;
 use crate::health;
 use crate::icons;
-use crate::models;
 use crate::paths;
-use crate::servers::{self, Server};
+use crate::servers::Server;
 use crate::sys;
 use crate::ui::{self, AMBER, GREEN, RED};
 
@@ -171,85 +170,44 @@ impl App {
     fn storage_settings(&mut self, ui: &mut egui::Ui) {
         let Some(r) = &self.repo else { return };
         let default = r.paths.default_models();
-        let comfy = r.paths.comfy();
+        let dir = self.models_dir();
         Self::section(ui, icons::HARDDISK, "Model storage");
-        let comfy_dir = self.cfg.models_dir.clone().unwrap_or_else(|| default.clone());
-        let ollama_dir = self.ollama_dir();
-        let mut comfy_change: Option<Option<PathBuf>> = None;
-        let mut ollama_change: Option<Option<PathBuf>> = None;
-        egui::Grid::new("storage").num_columns(3).spacing([12.0, 6.0]).show(ui, |ui| {
-            for (name, dir, custom, is_comfy) in [
-                ("ComfyUI models", &comfy_dir, self.cfg.models_dir.is_some(), true),
-                ("Ollama models", &ollama_dir, self.cfg.ollama_dir.is_some(), false),
-            ] {
-                ui.label(name);
-                ui.horizontal(|ui| {
-                    if ui.link(dir.display().to_string()).clicked() {
-                        sys::open(dir);
-                    }
-                    if let Some(f) = sys::free_space(dir) {
-                        ui.label(RichText::new(format!("{} free", sys::human(f))).weak());
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui::button(ui, icons::FOLDER_COG, "Change").clicked()
-                        && let Some(d) = rfd::FileDialog::new().set_title(name).pick_folder()
-                    {
-                        if is_comfy { comfy_change = Some(Some(d)) } else { ollama_change = Some(Some(d)) }
-                    }
-                    if custom && ui::tool(ui, icons::REFRESH, "back to the default folder").clicked() {
-                        if is_comfy { comfy_change = Some(None) } else { ollama_change = Some(None) }
-                    }
-                });
-                ui.end_row();
-            }
-        });
+        let mut change: Option<PathBuf> = None;
         ui.horizontal(|ui| {
-            if ui::button(ui, icons::FOLDER_MOVE, "Put all models into one folder...")
-                .on_hover_text(
-                    "ComfyUI models directly in it, Ollama in its 'ollama' subfolder - one drive, so identical files can be shared",
-                )
-                .clicked()
+            ui.label("Models folder:").on_hover_text("MODELS_DIR in .env - also used by the .bat files");
+            if ui.link(dir.display().to_string()).clicked() {
+                sys::open(&dir);
+            }
+            if let Some(f) = sys::free_space(&dir) {
+                ui.label(RichText::new(format!("{} free", sys::human(f))).weak());
+            }
+            if ui::button(ui, icons::FOLDER_COG, "Change").clicked()
                 && let Some(d) = rfd::FileDialog::new().set_title("One folder for all models").pick_folder()
             {
-                ollama_change = Some(Some(d.join("ollama")));
-                comfy_change = Some(Some(d));
+                change = Some(d);
+            }
+            if dir != default && ui::tool(ui, icons::REFRESH, "back to the default folder (models in the local-llm folder)").clicked() {
+                change = Some(default.clone());
             }
         });
-        ui.label(RichText::new("Files already in the old folders are offered to be moved on the Models page. Nothing is downloaded again. Restart ComfyUI/Ollama after a change.").small().weak());
-
-        let changed = comfy_change.is_some() || ollama_change.is_some();
-        if let Some(dir) = comfy_change {
-            let result = match &dir {
-                Some(d) if *d != default => models::write_extra_paths(&comfy, d),
-                _ => {
-                    models::remove_extra_paths(&comfy);
-                    Ok(())
-                }
-            };
-            match result {
-                Ok(()) => self.cfg.models_dir = dir.filter(|d| *d != default),
-                Err(e) => self.notify(e, true),
+        ui.label(
+            RichText::new(format!(
+                "Everything in one place: ComfyUI's folders (checkpoints, diffusion_models, vae ...) directly in it,                  Ollama in '{}', Hugging Face in '{}', torch hub in '{}', rembg in '{}', Kokoro voices in 'kokoro'.                  Files in old folders are offered to be moved on the Models page, nothing is downloaded again.                  Restart ComfyUI and Ollama after a change.",
+                paths::OLLAMA,
+                paths::HUGGINGFACE,
+                paths::TORCH,
+                paths::U2NET
+            ))
+            .small()
+            .weak(),
+        );
+        if let Some(new) = change.filter(|d| *d != dir) {
+            self.cfg.models_prev = Some(dir);
+            let value = if new == default { String::new() } else { new.display().to_string() };
+            self.save_env(&[(paths::MODELS_KEY, value)]);
+            if self.servers.up(Server::Ollama) || self.servers.up(Server::Comfy) {
+                self.notify("Models folder changed - stop and start ComfyUI and Ollama so they use it", false);
             }
-        }
-        if let Some(dir) = ollama_change {
-            let old = self.ollama_dir();
-            let value = dir.clone().unwrap_or_else(servers::ollama_default_dir);
-            // persist for Ollama started outside the GUI too
-            if let Err(e) = sys::setx("OLLAMA_MODELS", &value.display().to_string()) {
-                self.notify(format!("could not set OLLAMA_MODELS: {e}"), true);
-            }
-            let _ = std::fs::create_dir_all(&value);
-            self.cfg.ollama_dir = dir;
-            if old != value {
-                self.cfg.ollama_prev = Some(old);
-                if self.servers.up(Server::Ollama) {
-                    self.notify("Ollama folder changed - stop and start Ollama so it uses it", false);
-                }
-            }
-        }
-        if changed {
-            self.configure_models();
             self.save_config();
         }
     }

@@ -2,12 +2,13 @@
 rem Setup: downloads/resumes all models (ComfyUI ~57 GB + Ollama ~53 GB). Safe to re-run.
 setlocal
 cd /d "%~dp0"
+call "%~dp0commonmodels-env.bat"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"
 
 curl.exe -s -o nul http://127.0.0.1:11434/ || start "" "%OLLAMA%\ollama app.exe"
 timeout /t 5 /nobreak >nul
 
-echo === Ollama models
+echo === Ollama models (into %OLLAMA_MODELS% - restart the Ollama tray app if it still uses another folder)
 for %%M in (qwen3:8b qwen3-vl:4b gpt-oss:20b qwen3-coder:30b) do (
   echo --- %%M
   "%OLLAMA%\ollama.exe" pull %%M
