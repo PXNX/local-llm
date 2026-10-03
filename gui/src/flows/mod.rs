@@ -22,6 +22,8 @@ pub enum Provider {
     #[default]
     OpenRouter,
     Ollama,
+    /// OpenCode Zen free models through opencode-wrap (no key, needs OpenCode 2)
+    OpenCode,
 }
 
 impl Provider {
@@ -29,6 +31,7 @@ impl Provider {
         match value.trim().to_ascii_lowercase().as_str() {
             "ollama" => Provider::Ollama,
             "openrouter" => Provider::OpenRouter,
+            "opencode" => Provider::OpenCode,
             _ if has_key => Provider::OpenRouter,
             _ => Provider::Ollama,
         }
@@ -38,8 +41,16 @@ impl Provider {
         match self {
             Provider::OpenRouter => "openrouter",
             Provider::Ollama => "ollama",
+            Provider::OpenCode => "opencode",
         }
     }
+}
+
+/// OpenCode 2, built by `opencode-wrap\install-opencode2.bat` (opencode-wrap starts it).
+pub fn opencode2_installed() -> bool {
+    std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .is_some_and(|home| home.join(".opencode2").join("bin").join("opencode.exe").is_file())
 }
 
 /// How the flows reach the vision LLM (from `.env`).
@@ -60,6 +71,7 @@ impl Needs {
     fn llm(&mut self, llm: &Llm) {
         match llm.provider {
             Provider::OpenRouter => self.env.push("OPENROUTER_API_KEY"),
+            Provider::OpenCode => {}
             Provider::Ollama => {
                 self.models.push(ollama_id(&llm.ollama_model));
                 self.servers.push(Server::Ollama);

@@ -3,7 +3,7 @@ rem Setup after cloning: installs Ollama + OpenCode, ComfyUI portable (+ GGUF no
 rem and the OpenCode config. Safe to re-run. Models are downloaded afterwards by 0-download-all.bat.
 setlocal
 cd /d "%~dp0"
-call "%~dp0commonmodels-env.bat"
+call "%~dp0common\models-env.bat"
 set "COMFY_VER=v0.37.0"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
@@ -16,6 +16,9 @@ winget list --id DenoLand.Deno -e >nul 2>&1 || winget install --id DenoLand.Deno
 
 echo === OpenCode (bun global install, self-updating)
 "%USERPROFILE%\.bun\bin\bun.exe" install -g opencode-ai
+
+echo === OpenCode 2 for opencode-wrap (LLM_PROVIDER=opencode, built from source with bun, a few minutes once)
+call "%~dp0opencode-wrap\install-opencode2.bat"
 
 rem Large context with little VRAM (applies after Ollama restarts)
 setx OLLAMA_CONTEXT_LENGTH 32768 >nul
@@ -58,5 +61,5 @@ echo.
 echo Done. Next steps:
 echo   1. Update the NVIDIA driver to ^>= 580 (needed by ComfyUI, see README).
 echo   2. Run 0-download-all.bat to download the models.
-echo   3. T3 Code: Settings ^> Providers ^> OpenCode, enable it.
+echo   3. T3 Code: Settings ^> Providers ^> OpenCode, enable it (default model: free opencode/muse-spark-1.3-contributor-free).
 pause
