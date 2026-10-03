@@ -2,7 +2,7 @@
 rem Setup: downloads/resumes all models (ComfyUI ~57 GB + Ollama ~53 GB). Safe to re-run.
 setlocal
 cd /d "%~dp0"
-call "%~dp0commonmodels-env.bat"
+call "%~dp0common\models-env.bat"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"
 
 curl.exe -s -o nul http://127.0.0.1:11434/ || start "" "%OLLAMA%\ollama app.exe"
