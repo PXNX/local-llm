@@ -7,7 +7,7 @@ rem     12-comedy.bat --script comedy\out\<title>\script.json --handle @mychanne
 rem   Quick 480p 30 fps check first: 12-comedy-preview.bat. Result: comedy\out\<title>\
 setlocal
 cd /d "%~dp0"
-call "%~dp0commonmodels-env.bat"
+call "%~dp0common\models-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 set "MODE=%COMEDY_MODE%"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"

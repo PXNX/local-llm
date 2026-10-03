@@ -8,7 +8,7 @@ rem     8-objects.bat --thing "the Kremlin" --variant "at night with fireworks" 
 rem   Result: caricatures\out\<thing>\
 setlocal
 cd /d "%~dp0"
-call "%~dp0commonmodels-env.bat"
+call "%~dp0common\models-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
 set "ARGS=%*"

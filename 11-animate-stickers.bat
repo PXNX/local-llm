@@ -9,7 +9,7 @@ rem     11-animate-stickers.bat stickers\out\cat --mode loop   (quick simple loo
 rem   Wan 2.2 in ComfyUI animates each sticker, roughly 5-15 minutes per sticker on the RTX 2060.
 setlocal
 cd /d "%~dp0"
-call "%~dp0commonmodels-env.bat"
+call "%~dp0common\models-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
 rem ---- pick the sticker folder

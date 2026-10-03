@@ -7,7 +7,7 @@ rem     5-soundfx.bat --voice "C:\path\to\voice.wav"
 rem     5-soundfx.bat --speech "C:\path\to\clip.mp3"   (strip background, keep speech only)
 setlocal
 cd /d "%~dp0"
-call "%~dp0commonmodels-env.bat"
+call "%~dp0common\models-env.bat"
 set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
 "%PY%" -s "%~dp0soundfx\generate_sfx.py" %*
