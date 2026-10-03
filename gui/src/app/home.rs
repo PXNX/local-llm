@@ -34,6 +34,7 @@ impl App {
         let llm_ok = match llm.provider {
             Provider::OpenRouter => r.env.is_set("OPENROUTER_API_KEY"),
             Provider::Ollama => r.models.status(&crate::models::ollama_id(&llm.ollama_model)).usable(),
+            Provider::OpenCode => crate::flows::opencode2_installed(),
         };
         let needed: Vec<String> = FlowId::ALL.iter().flat_map(|id| self.needs(*id).models).collect::<BTreeSet<_>>().into_iter().collect();
         let missing: Vec<String> = needed.iter().filter(|m| !r.models.status(m).usable()).cloned().collect();
@@ -97,6 +98,8 @@ impl App {
                 Provider::OpenRouter => "add a free OpenRouter key - or switch to the local Ollama model".into(),
                 Provider::Ollama if llm_ok => format!("local model {}", llm.ollama_model),
                 Provider::Ollama => format!("local model {} not downloaded yet", llm.ollama_model),
+                Provider::OpenCode if llm_ok => "OpenCode Zen (free cloud models, no key, no GPU memory used)".into(),
+                Provider::OpenCode => "OpenCode 2 is missing - run opencode-wrap\\install-opencode2.bat".into(),
             };
             if row(ui, llm_ok, false, "Vision AI (captions, ratings, prompts)", llm_text, Some("Set up")) {
                 action = Some(2);

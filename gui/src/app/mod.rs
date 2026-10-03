@@ -312,6 +312,9 @@ impl App {
                 (Provider::OpenRouter, Some(r)) => {
                     (icons::CLOUD_OUTLINE, or_default(&r.env.get("OPENROUTER_MODEL"), "qwen/qwen3.8-27b:free"))
                 }
+                (Provider::OpenCode, Some(r)) => {
+                    (icons::CLOUD_OUTLINE, or_default(&r.env.get("OPENCODE_MODEL"), "opencode/muse-spark-1.3-contributor-free"))
+                }
                 _ => (icons::DESKTOP_TOWER, llm.ollama_model.clone()),
             };
             let weak = ui.visuals().weak_text_color();

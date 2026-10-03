@@ -37,11 +37,11 @@ finds this folder next to itself or asks for it (and can clone it on a fresh PC)
 - **Desktop shortcut**: Settings > Installation > *Create desktop shortcut* puts `local-llm.lnk` (with the app icon, started in this folder) on the Desktop, also a OneDrive-redirected one; `setup.bat` does the same when `gui\target\release\local-llm.exe` exists. The icon source is `gui/assets/icon.svg` (`gui/assets/make_icon.py` regenerates `icon.ico`/`icon.png`).
 - GUI settings live in `%APPDATA%\local-llm-gui\`, keys in the git-ignored `.env` - nothing private is committed.
 
-## Vision AI: OpenRouter (free) or local Ollama
+## Vision AI: OpenRouter (free), OpenCode Zen (free, no key) or local Ollama
 Captions (stickers), clip ratings (top 5), looks (caricatures) and motion prompts (image to video) all go through
 `common/llm.py`. Set in `.env` (or in the GUI's Settings):
 ```
-LLM_PROVIDER=openrouter             # or ollama
+LLM_PROVIDER=openrouter             # or opencode, or ollama
 OPENROUTER_API_KEY=sk-or-v1-...     # https://openrouter.ai/keys
 OPENROUTER_MODEL=qwen/qwen3.8-27b:free
 OPENROUTER_FALLBACKS=google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
@@ -50,6 +50,26 @@ LLM_LOCAL_FALLBACK=1                # when every OpenRouter model fails: local O
 Free models are often rate limited; up to 3 fallbacks are tried in order, then the local model. OpenRouter needs no
 GPU memory, so ComfyUI keeps its models loaded between runs.
 
+`LLM_PROVIDER=opencode` uses the free [OpenCode Zen](https://opencode.ai/zen) models without any key
+(default `OPENCODE_MODEL=opencode/muse-spark-1.3-contributor-free`, vision-capable; others e.g.
+`opencode/mimo-v2.6-flash-free`, list: http://127.0.0.1:8000/v1/models). They go through **opencode-wrap**
+(`opencode-wrap/server.ts`, a Bun port of [OpenCode-Wrap](https://github.com/Fast-Editor/OpenCode-Wrap) for the
+OpenCode 2 server API): an OpenAI-compatible API at http://127.0.0.1:8000/v1 (`OPENCODE_WRAP_URL`) in front of
+`opencode serve`. `common/llm.py` starts it when needed, it starts OpenCode 2 itself; `opencode-wrap.bat` runs it in a
+window, e.g. for other tools. `LLM_LOCAL_FALLBACK=1` falls back to the local Ollama model here too.
+- **OpenCode 2** is tagged upstream but not on npm yet (`opencode-ai` is 1.x, T3 Code's). `opencode-wrap\install-opencode2.bat`
+  (called by `setup.bat`) builds the latest `v2.x` tag with Bun into one native binary,
+  `%USERPROFILE%\.opencode2\bin\opencode.exe` (re-run to update; `OPENCODE_BIN` points elsewhere).
+- Zen's free tier only answers requests from inside OpenCode, so the wrapper uses throwaway sessions: plain prompts go
+  through the session `generate` route (one model call, no agent loop, nothing executed, ~1-2 s); streamed requests and
+  images use the session prompt with live text deltas from `/api/event`. Images become temp files (`file://`
+  attachments reach the model as images). OpenCode keeps its tools in those requests (the free tier wants them), so the
+  serve runs in an empty folder (`%TEMP%\opencode-wrap`, `WRAP_CWD`).
+- Endpoints: `GET /health`, `GET /v1/models`, `POST /v1/chat/completions` (`stream`, `tools`/`tool_choice` as
+  fenced tool-call blocks, `response_format`, `stop`, `max_tokens`, `image_url` parts). Other env vars: `WRAP_PORT`,
+  `WRAP_MODEL`, `OPENCODE_PORT` (4100), `OPENCODE_BASE` + `OPENCODE_PASSWORD` for an existing `opencode serve`,
+  `WRAP_OCO_TIMEOUT_MS`.
+
 ## Quick start - one .bat per flow
 | File | What it does |
 |---|---|
@@ -57,7 +77,8 @@ GPU memory, so ComfyUI keeps its models loaded between runs.
 | `0-download-all.bat` | Downloads/resumes all models (Ollama + ComfyUI). Safe to re-run. |
 | `1-image-video-comfyui.bat` | Frees VRAM (stops Ollama models), starts ComfyUI, opens the browser |
 | `2-stickers.bat` | Image -> 3 transparent WebP stickers of the pictured animal/person acting out reactions, no text by default (`--with-text` adds a short one). Drag & drop an image onto it or double-click and pick one. Starts Ollama + ComfyUI automatically. Result: `stickers\out\<image name>\` |
-| `3-coding-llm-t3code.bat` | Starts Ollama, preloads `qwen3:8b` and opens T3 Code. `3-coding-llm-t3code.bat gpt-oss:20b` for a different model, `... qwen3:8b cli` for OpenCode in the terminal |
+| `3-coding-llm-t3code.bat` | Opens T3 Code with the free cloud model `opencode/muse-spark-1.3-contributor-free` (OpenCode Zen, no key, no GPU). `3-coding-llm-t3code.bat opencode/mimo-v2.6-flash-free` for another Zen model; a local model like `qwen3:8b` / `gpt-oss:20b` starts Ollama and preloads it; `... qwen3:8b cli` for OpenCode in the terminal |
+| `opencode-wrap.bat` | OpenAI-compatible API for the free OpenCode Zen models at http://127.0.0.1:8000/v1 (see Vision AI); the flows start it by themselves with `LLM_PROVIDER=opencode` |
 | `4-vectorize.bat` | PNG/JPG -> SVG vector trace (like vectorizer.ai / Vector Magic). Drag & drop an image onto it or double-click and pick one. Fully local (`vtracer`), no Ollama/ComfyUI needed. Result: an `.svg` next to the input image |
 | `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line; `--speech clip.mp3` strips a recording down to speech only. Fully local (numpy/scipy synthesis, Demucs for speech), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
 | `6-characters.bat` | YouTube channel/playlist/video -> screenshots of the recurring characters in distinct poses/expressions, one folder per character. Double-click and enter a URL (default `@freeonis`). Fully local (yt-dlp + OWLv2 + CLIP). `--vectorize` (default in the launcher) also cuts out (rembg) and traces every screenshot to `*_cutout.svg`. Result: `characters\out\<name>\` |
@@ -296,7 +317,13 @@ Templates: Menu **Workflow > Browse Templates**.
 Large models spill into system RAM / the pagefile. Close other apps and keep the Windows pagefile on "system managed".
 
 ---------------------------------------------------------------------------
-## B. Local coding LLM - Ollama + OpenCode in T3 Code
+## B. Coding LLM - OpenCode in T3 Code (free Zen models or local Ollama)
+
+- **Default: free cloud models** of OpenCode Zen, no key, built into OpenCode: `config/opencode.json` sets
+  `"model": "opencode/muse-spark-1.3-contributor-free"` and `"small_model": "opencode/mimo-v2.6-flash-free"`
+  (titles/summaries). Other good free ones: `opencode/longcat-2.5-preview-free`, `opencode/nemotron-3-ultra-free`
+  (`opencode models opencode` lists them). Free models can be rate limited or rotated by OpenCode. The local Ollama
+  models below stay available as `ollama/<model>`.
 
 - **Ollama** (installed via winget) serves models at http://localhost:11434.
   It uses the RTX 2060 via **Vulkan** and works even with the old driver.
@@ -315,7 +342,7 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   (provider `ollama`, OpenAI-compatible endpoint `/v1`).
 - **T3 Code**: OpenCode provider enabled with binaryPath (`providerInstances.opencode`) in
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code, pick the model under the
-  OpenCode provider as `ollama/qwen3:8b` (or another one).
+  OpenCode provider: `opencode/muse-spark-1.3-contributor-free` (default) or `ollama/qwen3:8b` (or another one).
 
 Note: ComfyUI and Ollama share the 6 GB of VRAM. Don't run both at the same time
 (Ollama unloads models after 5 min idle; `ollama stop <model>` does it immediately).
