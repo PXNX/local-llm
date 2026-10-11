@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -7,7 +8,7 @@ use super::{App, mmss};
 use crate::config::Page;
 use crate::flows::FlowId;
 use crate::icons;
-use crate::jobs::{self, JobHandle, Launch, Line, State};
+use crate::jobs::{self, JobHandle, Launch, Level, Line, State};
 use crate::sys;
 use crate::ui::{self, AMBER, GREEN, RED};
 
@@ -116,7 +117,7 @@ impl App {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new(if running { "Running:" } else { "Last run:" }).weak());
-            run_status(ui, h, ui.available_width().min(540.0) - 270.0);
+            run_status(ui, h, self.cfg.step_times.get(&id), ui.available_width().min(540.0) - 270.0);
             if running && cancel_button(ui) {
                 self.ask_cancel(id);
             }
@@ -200,19 +201,19 @@ pub(super) fn cancel_button(ui: &mut egui::Ui) -> bool {
 }
 
 /// Progress bar while running, else how the run ended.
-pub(super) fn run_status(ui: &mut egui::Ui, h: &JobHandle, width: f32) {
+pub(super) fn run_status(ui: &mut egui::Ui, h: &JobHandle, history: Option<&HashMap<String, f32>>, width: f32) {
     let mut j = h.job.lock().unwrap();
     let time = mmss(j.elapsed());
     match j.state.clone() {
         State::Running => {
             let frac = j.progress.fraction();
-            let eta = j.eta();
+            let eta = j.eta(history);
             let what = match (j.progress.item, j.progress.step) {
                 (Some((i, n)), Some((s, m))) => format!("{} {i}/{n} · step {s}/{m}", j.progress.label),
                 (Some((i, n)), None) => format!("{} {i}/{n}", j.progress.label),
                 (None, Some((s, m))) => format!("step {s}/{m}"),
                 (None, None) if j.console => "in the console window".into(),
-                (None, None) => "working".into(),
+                (None, None) => j.current_step.clone().unwrap_or_else(|| "working".into()),
             };
             let text = format!("{what} · {time}{}", eta.map(|e| format!(" · about {} left", mmss(e))).unwrap_or_default());
             ui.add(egui::ProgressBar::new(frac.unwrap_or(0.0)).desired_width(width.max(120.0)).text(text).animate(frac.is_none()));
@@ -263,12 +264,16 @@ fn log_view(ui: &mut egui::Ui, h: &JobHandle) {
     });
 }
 
-/// One log line: ANSI colors, stderr in amber, http(s) links and existing file paths clickable.
+/// One log line: ANSI colors, errors in red, warnings in amber, http(s) links and existing file paths clickable.
 fn log_line(ui: &mut egui::Ui, line: &Line) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add(egui::Label::new(RichText::new(format!("{} ", line.time)).monospace().weak()));
-        let base = if line.err { Some(AMBER) } else { None };
+        let base = match line.level {
+            Level::Error => Some(RED),
+            Level::Warn => Some(AMBER),
+            Level::Info => None,
+        };
         for (text, color, target) in segments(line) {
             let rich = RichText::new(text).monospace();
             let rich = match color.or(base) {
@@ -357,7 +362,7 @@ mod tests {
         let line = Line {
             time: "00:00:00".into(),
             text: r"[dl   ] https://t.me/budyarchive/123 -> C:\out\a.mp4 done".into(),
-            err: false,
+            level: Level::Info,
             colors: Vec::new(),
         };
         let segs = segments(&line);
@@ -372,7 +377,7 @@ mod tests {
     fn multibyte_chars_do_not_panic() {
         for text in ["[chan ] 🍌 Memes und mehr 🍌 #Россия: 4 video(s)", "Abonniere @NYX_Memes für mehr!", "a ü", "x 😂 C:\\out"]
         {
-            let line = Line { time: "00:00:00".into(), text: text.into(), err: false, colors: Vec::new() };
+            let line = Line { time: "00:00:00".into(), text: text.into(), level: Level::Info, colors: Vec::new() };
             assert_eq!(segments(&line).iter().map(|(s, _, _)| *s).collect::<String>(), text);
         }
     }

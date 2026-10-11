@@ -41,7 +41,7 @@ impl App {
             };
             ui.horizontal(|ui| {
                 flow_link(ui, id, &h.job.lock().unwrap().title, open);
-                run_status(ui, &h, ui.available_width() - 300.0);
+                run_status(ui, &h, self.cfg.step_times.get(&id), ui.available_width() - 300.0);
                 if cancel_button(ui) {
                     self.ask_cancel(id);
                 }
@@ -108,7 +108,7 @@ impl App {
             for (id, h) in &done {
                 ui.horizontal(|ui| {
                     flow_link(ui, *id, &h.job.lock().unwrap().title, open);
-                    run_status(ui, h, 0.0);
+                    run_status(ui, h, self.cfg.step_times.get(id), 0.0);
                     run_actions(ui, h);
                 });
             }
@@ -128,10 +128,10 @@ impl App {
         ui::card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add(icons::PLAYLIST_PLAY.image(20.0, ui::ACCENT));
-                if let Some((_, h)) = self.running_job() {
+                if let Some((id, h)) = self.running_job() {
                     let title = h.job.lock().unwrap().title.clone();
                     ui.label(RichText::new(format!("Running: {title}")).strong());
-                    run_status(ui, h, 260.0);
+                    run_status(ui, h, self.cfg.step_times.get(&id), 260.0);
                 }
                 if !self.queue.is_empty() {
                     ui.label(format!("{} waiting", self.queue.len()));

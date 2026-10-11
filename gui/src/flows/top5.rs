@@ -127,7 +127,7 @@ impl Flow for Top5 {
             );
             ui.end_row();
             w::label(ui, "Title language", "");
-            ui.text_edit_singleline(&mut self.lang);
+            w::language(ui, "top5-lang", &mut self.lang);
             ui.end_row();
             w::label(ui, "Headline", "own intro text");
             ui.add(egui::TextEdit::singleline(&mut self.headline).hint_text("Top 5 Funniest/Cutest Videos of Today"));

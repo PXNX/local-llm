@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO / "topvideos"))
 import generate_sfx as fx  # noqa: E402
 import soundtrack as st  # noqa: E402
 from voice import read_wav, resample, write_wav  # noqa: E402
+from common import log  # noqa: E402
 
 SR = 44100
 SFX_DIR = REPO / "soundfx" / "out"
@@ -116,7 +117,7 @@ def mix(path, total, lines, effects, music="calm", seed=0):
     for at, name in effects:
         a = effect(name, rng)
         if a is None:
-            print(f"[sound  ] unknown effect {name!r}, skipped")
+            log.warn("sound  ", f"unknown effect {name!r}, skipped")
             continue
         a = a / max(1e-6, np.abs(a).max()) * GAIN.get(name, 0.5)
         st._add(out, np.stack([a, a]), max(0.0, at))

@@ -95,7 +95,7 @@ impl Flow for Comedy {
                 w::list(ui, "cast", &mut self.cast, "e.g. Trump", None, false);
                 ui.end_row();
                 w::label(ui, "Language", "Kokoro voices: English, Spanish, French, Italian, Portuguese, Hindi, Japanese, Chinese; others use the Windows voices");
-                ui.text_edit_singleline(&mut self.lang);
+                w::language(ui, "comedy-lang", &mut self.lang);
                 ui.end_row();
                 w::label(ui, "Length", "rough target");
                 ui.add(egui::DragValue::new(&mut self.seconds).range(15..=300).suffix(" s"));

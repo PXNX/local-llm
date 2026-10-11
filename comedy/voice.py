@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import wave
 from pathlib import Path
@@ -21,7 +22,7 @@ from scipy import signal
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from common import storage  # noqa: E402
+from common import log, storage  # noqa: E402
 
 MODELS = storage.path("kokoro")
 if not (MODELS / "kokoro-v1.0.onnx").exists() and (HERE / "models" / "kokoro-v1.0.onnx").exists():
@@ -93,7 +94,7 @@ def llm_profiles(cast, llm):
                         pass
         return out
     except Exception as e:
-        print(f"[voice  ] LLM voice profile failed ({str(e)[:120]}), using default pitch/speed")
+        log.warn("voice  ", f"LLM voice profile failed ({str(e)[:120]}), using default pitch/speed")
         return {}
 
 
@@ -103,11 +104,19 @@ def _download():
         path = MODELS / name
         if path.exists() and path.stat().st_size > 1_000_000:
             continue
-        print(f"[voice  ] downloading {name} (once) ...")
         tmp = path.with_suffix(path.suffix + ".part")
         with urllib.request.urlopen(url, timeout=60) as r, open(tmp, "wb") as f:
+            total = int(r.headers.get("Content-Length") or 0)
+            got, t0, last = 0, time.time(), 0.0
             while chunk := r.read(1 << 20):
                 f.write(chunk)
+                got += len(chunk)
+                now = time.time()
+                if total and now - last > 0.5:
+                    rate = got / max(1e-3, now - t0) / 1e6
+                    print(f"[dl   ] {name} (once): {int(got * 100 / total)}/100 ({rate:.1f} MB/s)", end="\r", flush=True)
+                    last = now
+        print(f"[dl   ] {name} done")
         tmp.replace(path)
 
 

@@ -208,8 +208,20 @@ impl App {
 
     /// Starts the next queued run when nothing is running. Called every frame; a finished job repaints.
     fn pump_queue(&mut self) {
-        if self.running_job().is_some_and(|(_, h)| h.job.lock().unwrap().running()) {
-            return;
+        if let Some(id) = self.running {
+            let h = self.jobs.get(&id).cloned();
+            if let Some(h) = h {
+                let mut j = h.job.lock().unwrap();
+                if j.running() {
+                    return;
+                }
+                if !j.history_merged {
+                    j.history_merged = true;
+                    let steps = std::mem::take(&mut j.steps);
+                    drop(j);
+                    self.merge_step_history(id, steps);
+                }
+            }
         }
         self.running = None;
         if let Some((id, launch)) = self.queue.pop_front() {
@@ -252,6 +264,19 @@ impl App {
             self.configure_models();
         }
         self.save_config();
+    }
+
+    /// Blends a finished run's step durations into the flow's saved history (exponential moving
+    /// average), so the next run's ETA is informed even before its own progress counters kick in.
+    fn merge_step_history(&mut self, id: FlowId, steps: Vec<(String, Duration)>) {
+        if steps.is_empty() {
+            return;
+        }
+        let saved = self.cfg.step_times.entry(id).or_default();
+        for (tag, dur) in steps {
+            let secs = dur.as_secs_f32();
+            saved.entry(tag).and_modify(|avg| *avg = *avg * 0.7 + secs * 0.3).or_insert(secs);
+        }
     }
 
     fn save_config(&mut self) {
@@ -329,10 +354,11 @@ impl App {
                     0 => String::new(),
                     n => format!(" · +{n} queued"),
                 };
-                if let Some((_, h)) = self.running_job() {
+                if let Some((id, h)) = self.running_job() {
+                    let history = self.cfg.step_times.get(&id);
                     let mut j = h.job.lock().unwrap();
                     let frac = j.progress.fraction();
-                    let eta = j.eta();
+                    let eta = j.eta(history);
                     let text = format!(
                         "{} {}{}{waiting}",
                         j.title,
