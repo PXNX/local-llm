@@ -1,0 +1,38 @@
+{
+  "1": {
+    "class_type": "Iris3BGGUFCheckpoint",
+    "inputs": { "checkpoint": "Iris-3B/Iris-3B-Q4_K_S.gguf" }
+  },
+  "2": {
+    "class_type": "Iris3BQwenEncode",
+    "inputs": {
+      "iris_checkpoint": ["1", 0],
+      "prompt": "",
+      "negative_prompt": "text, letters, watermark, signature, blurry, lowres, photorealistic, busy background, frame, cropped",
+      "text_encoder": "Qwen3-VL-4B-Instruct (HF baseline)",
+      "load_mode": "auto",
+      "gpu_memory_mb": 6200,
+      "cpu_memory_mb": 8192
+    }
+  },
+  "3": {
+    "class_type": "Iris3BGGUFSampler",
+    "inputs": {
+      "iris_checkpoint": ["1", 0],
+      "conditioning": ["2", 0],
+      "width": 1024,
+      "height": 1024,
+      "steps": 100,
+      "order": 2,
+      "cfg": 3.0,
+      "shift": 4.0,
+      "seed": 0,
+      "dequant_dtype": "bfloat16",
+      "unload_after": true
+    }
+  },
+  "8": {
+    "class_type": "SaveImage",
+    "inputs": { "images": ["3", 0], "filename_prefix": "caricature/stylized" }
+  }
+}

@@ -13,6 +13,13 @@ Usage (via 7-caricatures.bat, which uses ComfyUI's embedded Python):
   7-caricatures.bat --photo me.jpg --name Felix [--features "round glasses, beard"]
   8-objects.bat --thing "S-400 air defense system" --thing "oil refinery" [--vectorize]
 Result: caricatures/out/<name>/<name>_<variant>_<seed>.png (+ .svg)
+
+Draw engines (--engine):
+  flux1   FLUX.1 [schnell] GGUF (default). Text-to-image for --who/--thing, img2img from the photo for --photo.
+  iris3b  Iris-3B pixel-space text-to-image (GGUF-quantized), text-to-image only - a --photo still gets
+          described by the vision model first, but the photo itself isn't used, no img2img. Needs the same
+          unofficial ComfyUI-Iris-3B node + GGUF checkpoint as stickers' --engine iris3b, see
+          stickers/make_stickers.py --help for exact requirements/caveats (days old, experimental).
 """
 import argparse
 import io
@@ -86,7 +93,13 @@ def describe(img):
 
 
 # ---------------------------------------------------------------- 2. draw
-def draw(prompt, seed, photo=None, strength=0.75, size=None):
+def draw(prompt, seed, photo=None, strength=0.75, size=None, engine="flux1"):
+    if engine == "iris3b":
+        wf = json.loads((HERE / "caricature_workflow_iris3b_api.json").read_text())
+        wf["2"]["inputs"]["prompt"] = prompt
+        wf["3"]["inputs"]["seed"] = seed
+        return _run(wf)
+
     wf = json.loads((HERE / "caricature_workflow_api.json").read_text())
     wf["6"]["inputs"]["text"] = prompt
     wf["7"]["inputs"]["seed"] = seed
@@ -101,7 +114,10 @@ def draw(prompt, seed, photo=None, strength=0.75, size=None):
         wf["11"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["10", 0], "vae": ["3", 0]}}
         wf["7"]["inputs"]["latent_image"] = ["11", 0]
         wf["7"]["inputs"]["denoise"] = strength
+    return _run(wf)
 
+
+def _run(wf):
     pid = http_json(f"{COMFY_URL}/prompt", {"prompt": wf})["prompt_id"]
     while True:
         hist = http_json(f"{COMFY_URL}/history/{pid}")
@@ -178,6 +194,7 @@ def main():
     ap.add_argument("--features", help="extra look hints, e.g. \"grey hair, rimless glasses\" (added to the prompt)")
     ap.add_argument("--strength", type=float, default=0.75,
                     help="--photo img2img denoise: 0.5 close to the photo .. 0.9 free cartoon (default 0.75)")
+    ap.add_argument("--engine", choices=["flux1", "iris3b"], default="flux1", help="draw engine, see above (default flux1)")
     ap.add_argument("--count", type=int, default=None,
                     help=f"images per person/thing, one per expression/view (default {len(EXPRESSIONS)} / {len(VIEWS)})")
     ap.add_argument("--variant", "--expression", action="append",
@@ -217,7 +234,7 @@ def main():
         for i, variant in enumerate(variants):
             s = seed + i
             print(f"[draw   ] {name} {i + 1}/{len(variants)}: {variant} (seed {s}) ...")
-            img = draw(template.format(subject=subject, variant=variant), s, photo, args.strength)
+            img = draw(template.format(subject=subject, variant=variant), s, photo, args.strength, engine=args.engine)
             png = folder / f"{name}_{slug(variant.split(',')[0])}_{s}.png"
             img.save(png)
             if args.cutout:

@@ -50,6 +50,15 @@ if not exist "ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF" (
 )
 "%PY%" -s -m pip install -q --no-warn-script-location -r ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-GGUF\requirements.txt "rembg[cpu]" vtracer yt-dlp scikit-learn telethon qrcode imageio-ffmpeg resvg-py kokoro-onnx
 
+rem Stickers/Caricatures --engine iris3b: unofficial node + GGUF quant, both days old - see the --engine
+rem help in stickers/make_stickers.py --help. The GGUF checkpoint itself is grabbed by 0-download-all.bat;
+rem the Qwen3-VL-4B-Instruct text encoder downloads itself via transformers on first use.
+if not exist "ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Iris3B" (
+  git clone --depth 1 https://github.com/RealRebelAI/ComfyUI-Iris-3B ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Iris3B
+)
+"%PY%" ComfyUI_windows_portable\ComfyUI\custom_nodes\ComfyUI-Iris3B\install_iris_source.py
+"%PY%" -s -m pip install -q --no-warn-script-location omegaconf accelerate
+
 if exist "%~dp0gui\target\release\local-llm.exe" (
   echo === Desktop shortcut local-llm.lnk
   set "LLM_EXE=%~dp0gui\target\release\local-llm.exe"
