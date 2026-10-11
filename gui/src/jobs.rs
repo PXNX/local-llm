@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -18,8 +18,40 @@ const REPAINT: Duration = Duration::from_millis(80);
 pub struct Line {
     pub time: String,
     pub text: String,
-    pub err: bool,
+    pub level: Level,
     pub colors: Vec<(usize, usize, egui::Color32)>,
+}
+
+/// Severity the GUI colors log lines by. Scripts mark non-info lines explicitly
+/// (see common/log.py: `[tag] WARNING: ...` / `[tag] ERROR: ...`) instead of the GUI
+/// guessing from wording; anything else on stderr is an unhandled crash (traceback,
+/// `sys.exit(message)`, an argparse error) and is colored as an error too.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Level {
+    Info,
+    Warn,
+    Error,
+}
+
+fn level(text: &str, err: bool) -> Level {
+    let body = text.strip_prefix('[').and_then(|r| r.split_once(']')).map_or(text, |(_, rest)| rest.trim_start());
+    if body.starts_with("ERROR:") {
+        Level::Error
+    } else if body.starts_with("WARNING:") {
+        Level::Warn
+    } else if err {
+        Level::Error
+    } else {
+        Level::Info
+    }
+}
+
+/// The `tag` of a `[tag] ...` log line, whether or not it carries an item/total fraction - used to
+/// time how long each major step of the script takes (write, cast, voice, render, ...).
+fn tag(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix('[')?;
+    let (tag, _) = rest.split_once(']')?;
+    Some(tag.trim())
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -78,6 +110,13 @@ pub struct Job {
     pub command: String,
     last_progress: bool,
     eta: Option<(Instant, Duration)>,
+    /// How long each `[tag]` section of the script ran, filled in as the tag changes and finally
+    /// when the job ends; merged into this flow's saved step-time history once it's read.
+    pub steps: Vec<(String, Duration)>,
+    pub current_step: Option<String>,
+    step_started: Instant,
+    /// Set by the app once `steps` has been folded into the saved history, so it isn't merged twice.
+    pub history_merged: bool,
 }
 
 impl Job {
@@ -85,19 +124,36 @@ impl Job {
         let (text, colors) = parse_ansi(&raw);
         if !err {
             self.progress.parse(&text);
+            if let Some(t) = tag(&text)
+                && self.current_step.as_deref() != Some(t)
+            {
+                let now = Instant::now();
+                if let Some(prev) = self.current_step.replace(t.to_owned()) {
+                    self.steps.push((prev, now - self.step_started));
+                }
+                self.step_started = now;
+            }
         }
+        let level = level(&text, err);
         let time = sys::now_hms();
         if progress && self.last_progress && !self.lines.is_empty() {
             // tqdm-style "\r" progress: overwrite the previous progress line instead of scrolling
             let last = self.lines.back_mut().expect("non-empty");
-            *last = Line { time, text, err, colors };
+            *last = Line { time, text, level, colors };
         } else {
             if self.lines.len() == MAX_LINES {
                 self.lines.pop_front();
             }
-            self.lines.push_back(Line { time, text, err, colors });
+            self.lines.push_back(Line { time, text, level, colors });
         }
         self.last_progress = progress;
+    }
+
+    /// Flushes the still-open step when the job ends, so its time isn't lost.
+    fn finish(&mut self, ended: Instant) {
+        if let Some(t) = self.current_step.take() {
+            self.steps.push((t, ended - self.step_started));
+        }
     }
 
     pub fn running(&self) -> bool {
@@ -108,16 +164,25 @@ impl Job {
         self.ended.unwrap_or_else(Instant::now) - self.started
     }
 
-    /// Remaining time from progress so far; recomputed every 3 s so the number doesn't jitter.
-    pub fn eta(&mut self) -> Option<Duration> {
+    /// Remaining time: the script's own item/total fraction when it has one (render frames, sticker
+    /// counts, ...); otherwise - most of a run, e.g. the writing/casting/voicing stages that have no
+    /// counter - this flow's historical total from past runs minus elapsed so far. Recomputed every
+    /// 3 s so the number doesn't jitter.
+    pub fn eta(&mut self, history: Option<&HashMap<String, f32>>) -> Option<Duration> {
         let now = Instant::now();
         if self.eta.is_none_or(|(at, _)| now - at > Duration::from_secs(3)) {
-            let f = self.progress.fraction()?;
-            if f < 0.01 {
-                return None;
-            }
             let elapsed = self.elapsed().as_secs_f32();
-            self.eta = Some((now, Duration::from_secs_f32(elapsed * (1.0 - f) / f)));
+            let remaining = match self.progress.fraction() {
+                Some(f) if f >= 0.01 => elapsed * (1.0 - f) / f,
+                _ => {
+                    let total: f32 = history?.values().sum();
+                    if total <= elapsed {
+                        return None;
+                    }
+                    total - elapsed
+                }
+            };
+            self.eta = Some((now, Duration::from_secs_f32(remaining)));
         }
         let (at, eta) = self.eta?;
         Some(eta.saturating_sub(now - at))
@@ -163,6 +228,10 @@ pub fn start(ctx: &egui::Context, l: Launch) -> JobHandle {
         command,
         last_progress: false,
         eta: None,
+        steps: Vec::new(),
+        current_step: None,
+        step_started: Instant::now(),
+        history_merged: false,
     }));
     let handle = JobHandle { job, cancel: Arc::default() };
     let h = handle.clone();
@@ -176,7 +245,9 @@ pub fn start(ctx: &egui::Context, l: Launch) -> JobHandle {
                 j.push(format!("[gui  ] {e}"), true, false);
             }
             j.state = state;
-            j.ended = Some(Instant::now());
+            let ended = Instant::now();
+            j.ended = Some(ended);
+            j.finish(ended);
             drop(j);
             ctx.request_repaint();
         })
@@ -402,8 +473,8 @@ pub fn open_dir(p: &Path) {
 mod tests {
     use super::*;
 
-    fn run(bytes: &[u8]) -> Vec<String> {
-        let job = Mutex::new(Job {
+    fn blank_job() -> Job {
+        Job {
             title: String::new(),
             progress: Progress::default(),
             lines: VecDeque::new(),
@@ -415,7 +486,15 @@ mod tests {
             command: String::new(),
             last_progress: false,
             eta: None,
-        });
+            steps: Vec::new(),
+            current_step: None,
+            step_started: Instant::now(),
+            history_merged: false,
+        }
+    }
+
+    fn run(bytes: &[u8]) -> Vec<String> {
+        let job = Mutex::new(blank_job());
         pump(Box::new(std::io::Cursor::new(bytes.to_vec())), false, &job, &egui::Context::default());
         job.into_inner().unwrap().lines.into_iter().map(|l| l.text).collect()
     }
@@ -449,6 +528,18 @@ mod tests {
         assert_eq!(p.item, Some((7, 25)), "paths are no progress");
         p.parse("no tag 1/2");
         assert_eq!(p.item, Some((7, 25)));
+    }
+
+    #[test]
+    fn step_durations_are_recorded_per_tag() {
+        let mut j = blank_job();
+        j.push("[write  ] writing the sketch ...".into(), false, false);
+        j.push("[cast   ] drawing missing characters".into(), false, false);
+        assert_eq!(j.steps.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["write"]);
+        assert_eq!(j.current_step.as_deref(), Some("cast"));
+        j.finish(Instant::now());
+        assert_eq!(j.steps.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["write", "cast"]);
+        assert!(j.current_step.is_none(), "finish() flushes the open step");
     }
 
     #[test]

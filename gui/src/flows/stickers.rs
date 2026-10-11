@@ -101,7 +101,7 @@ impl Flow for Stickers {
 
             if self.text == Text::Llm {
                 w::label(ui, "Language", "caption language");
-                ui.text_edit_singleline(&mut self.lang);
+                w::language(ui, "stickers-lang", &mut self.lang);
                 ui.end_row();
             }
 

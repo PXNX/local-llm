@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import av
@@ -903,7 +904,18 @@ async def run(args):
             print(f"[dl   ] {i}/{len(cands)} {c['channel'][:20]:20} {c['link']}")
             if not path.exists() or path.stat().st_size == 0:
                 tmp = path.with_suffix(".part")
-                await client.download_media(c["_msg"], file=str(tmp))
+                t0, last = time.time(), 0.0
+
+                def _progress(got, total):
+                    nonlocal last
+                    now = time.time()
+                    if total and now - last > 0.5:
+                        rate = got / max(1e-3, now - t0) / 1e6
+                        print(f"[dl   ] {int(got * 100 / total)}/100 ({rate:.1f} MB/s)", end="\r", flush=True)
+                        last = now
+
+                await client.download_media(c["_msg"], file=str(tmp), progress_callback=_progress)
+                print()
                 tmp.replace(path)
             c["path"] = path
 

@@ -36,7 +36,7 @@ from scipy import ndimage
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from common import llm  # noqa: E402
+from common import llm, log  # noqa: E402
 
 COMFY_DIR = HERE.parent / "ComfyUI_windows_portable" / "ComfyUI"
 COMFY_URL = "http://127.0.0.1:8188"
@@ -311,8 +311,9 @@ def main():
                 frames = frames + frames[-2:0:-1]
         out = f.with_suffix(".webm")
         size, crf = encode_webm(frames, fps, out)
-        warn = "" if size <= MAX_BYTES else "  - still over 256 KB, try --seconds 1.5"
-        print(f"[done   ] {out}  ({size // 1024} KB, crf {crf}){warn}")
+        print(f"[done   ] {out}  ({size // 1024} KB, crf {crf})")
+        if size > MAX_BYTES:
+            log.warn("done   ", f"{out} still over 256 KB, try --seconds 1.5")
 
 
 if __name__ == "__main__":

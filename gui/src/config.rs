@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,9 @@ pub struct Config {
     pub models_prev: Option<PathBuf>,
     pub page: Page,
     pub forms: Forms,
+    /// Average seconds spent in each `[tag]` step of a flow's last few runs, used to estimate ETA
+    /// even before the script reports its own progress fraction.
+    pub step_times: HashMap<FlowId, HashMap<String, f32>>,
 }
 
 impl Default for Config {
@@ -43,6 +47,7 @@ impl Default for Config {
             models_prev: None,
             page: Page::Home,
             forms: Forms::default(),
+            step_times: HashMap::new(),
         }
     }
 }

@@ -109,6 +109,26 @@ pub fn choice(ui: &mut egui::Ui, id: &str, value: &mut String, options: &[(&str,
     });
 }
 
+/// Preset language picker (German, English, Persian) with freeform text for anything else.
+pub fn language(ui: &mut egui::Ui, id: &str, value: &mut String) {
+    const PRESETS: &[&str] = &["English", "German", "Persian"];
+    let is_preset = PRESETS.contains(&value.as_str());
+    ui.horizontal(|ui| {
+        let current = if is_preset { value.as_str() } else { "Custom" };
+        egui::ComboBox::from_id_salt(id).selected_text(current).width(110.0).show_ui(ui, |ui| {
+            for lang in PRESETS {
+                ui.selectable_value(value, (*lang).to_string(), *lang);
+            }
+            if ui.selectable_label(!is_preset, "Custom").clicked() && is_preset {
+                value.clear();
+            }
+        });
+        if !is_preset {
+            ui.text_edit_singleline(value);
+        }
+    });
+}
+
 /// Seed: empty = random each run.
 pub fn seed(ui: &mut egui::Ui, value: &mut Option<i64>) {
     ui.horizontal(|ui| {
