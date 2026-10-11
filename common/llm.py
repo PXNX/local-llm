@@ -11,7 +11,10 @@ Configured in the repo's .env (real environment variables win):
   OPENCODE_WRAP_URL   opencode-wrap (opencode-wrap/server.ts, started with bun when down), default http://127.0.0.1:8000/v1
   LLM_LOCAL_FALLBACK  also applies to opencode: local Ollama model when the Zen model fails
   OLLAMA_MODEL        local vision model, default qwen3-vl:4b
-  OLLAMA_TEXT_MODEL   local model for text-only prompts (text_json), default OLLAMA_MODEL
+  OLLAMA_TEXT_MODEL   local model for text-only prompts (text_json), default qwen3:8b - qwen3-vl:4b
+                      struggles with long structured prompts (e.g. the comedy sketch writer): it can
+                      burn its entire num_predict budget "thinking" and return empty content, never
+                      reaching the answer, however high num_predict is set
 """
 import base64
 import json
@@ -32,6 +35,7 @@ DEFAULT_OPENROUTER_MODEL = "qwen/qwen3.8-27b:free"
 DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b"
 DEFAULT_OPENCODE_MODEL = "opencode/muse-spark-1.3-contributor-free"
 DEFAULT_WRAP_URL = "http://127.0.0.1:8000/v1"
+DEFAULT_OLLAMA_TEXT_MODEL = "qwen3:8b"
 DEFAULT_FALLBACKS = "google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 MAX_FALLBACKS = 3
 
@@ -130,7 +134,7 @@ def label():
 
 
 def text_label():
-    local = _ENV.get("OLLAMA_TEXT_MODEL") or ollama_model()
+    local = _ENV.get("OLLAMA_TEXT_MODEL") or DEFAULT_OLLAMA_TEXT_MODEL
     return f"{local} via ollama" if is_local() else label()
 
 
@@ -226,7 +230,7 @@ def _ollama(prompt, b64, temperature, keep_alive, ollama_options):
     if b64:
         msg["images"] = [b64]
     payload = {
-        "model": ollama_model() if b64 else (_ENV.get("OLLAMA_TEXT_MODEL") or ollama_model()),
+        "model": ollama_model() if b64 else (_ENV.get("OLLAMA_TEXT_MODEL") or DEFAULT_OLLAMA_TEXT_MODEL),
         "messages": [msg],
         "format": "json",
         "stream": False,
