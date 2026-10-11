@@ -132,10 +132,12 @@ Stylize engines (`stickers/sticker_workflow_*_api.json`, can also be dragged int
 | `photomaker` | same checkpoint + `models/photomaker/photomaker-v2.bin` (`0-download-all.bat` grabs it) | SDXL + PhotoMaker face-identity conditioning - best resemblance for the VRAM it costs, once SDXL is fixed |
 | `qwen-image21` | `models/diffusion_models/qwen-image-2.1-UC-fp8.safetensors` (downloaded) + a Qwen3-VL-8B text encoder + the Qwen-Image 2.1 VAE (not downloaded yet, several more GB) | Native reference-image editing, best quality ceiling, but slow on 6 GB VRAM |
 | `flux2-klein` | `models/diffusion_models/flux2-klein-base-9b-fp8.safetensors` + `models/vae/flux2_vae.safetensors` (downloaded) + a Flux.2 Klein Qwen3 text encoder (not downloaded yet) | FLUX.2's distilled edit model, also slow on 6 GB VRAM |
+| `iris3b` | `models/checkpoints/Iris-3B/Iris-3B-Q4_K_S.gguf` (downloaded) + the unofficial `ComfyUI-Iris-3B` custom node (`setup.bat` clones it) | Iris-3B pixel-space text-to-image, GGUF-quantized, no reference-image conditioning. The Qwen3-VL-4B-Instruct text encoder downloads itself via `transformers` on first use. Fits the 2060's 6 GB (unlike the un-quantized fp32 weights) since the whole quantized model is only ~1.7 GB, but neither it nor the text encoder use ComfyUI's VRAM/CPU streaming - full load, not partial. Unofficial, days old, experimental |
 
 `qwen-image21` and `flux2-klein` are wired up but need the missing text-encoder (and for
 `qwen-image21`, VAE) files placed by hand before they'll run - see the `--engine` help in
-`stickers/make_stickers.py --help` for exact filenames/paths.
+`stickers/make_stickers.py --help` for exact filenames/paths. `iris3b` also works for the caricature/object
+flows below (`--engine iris3b`, text-to-image only there too).
 
 ### Vectorize options (`4-vectorize.bat photo.jpg [options]`)
 - `--style photo` smooth curves for photos/gradients (default), `logo` crisp flat-color shapes, `sketch` preserves fine detail/lines
@@ -168,6 +170,9 @@ merge by hand. Lowering `--match` merges more but files wrong characters (e.g. a
   (qwen3-vl describes the look, FLUX.1 img2img), `--features "grey hair, glasses"` extra look hints
 - `--variant "..."` own expressions/poses or views/states instead of the built-in list, `--count 3` fewer images
 - `--strength 0.75` photo img2img: 0.5 close to the photo ... 0.9 free cartoon
+- `--engine flux1` draw engine, default `flux1`; `--engine iris3b` uses the same GGUF Iris-3B setup as
+  stickers (text-to-image only - a `--photo` is still described by the vision model, but the photo itself
+  isn't used for conditioning, no img2img)
 - `--cutout` transparent PNG, `--vectorize` SVG via vtracer ("logo" preset); `--vectorize` implies `--cutout`,
   and the launchers (7/8) trace to SVG by default. The cutout flood-fills the plain white background (keeps
   white parts inside the drawing, hard alpha for a clean trace) and falls back to rembg otherwise

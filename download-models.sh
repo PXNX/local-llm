@@ -41,6 +41,8 @@ FILES=(
   # --- Video: Wan 2.2 14B (large, GGUF, two experts)
   "diffusion_models $WAN14/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q3_K_M.gguf"
   "diffusion_models $WAN14/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q3_K_M.gguf"
+  # --- Stickers/Caricatures: --engine iris3b (GGUF, days-old unofficial node+quant, see --engine help)
+  "checkpoints/Iris-3B $HF/realrebelai/iris-3b_GGUFs/resolve/main/Iris-3B-Q4_K_S.gguf"
   # --- Stickers: --engine qwen-image21 / flux2-klein need more files not listed here (multi-GB
   # text encoders + a VAE each); see the --engine help in stickers/make_stickers.py for what's
   # missing and where it goes. Grab them manually once you know which exact checkpoint you want.

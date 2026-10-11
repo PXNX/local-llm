@@ -27,6 +27,16 @@ Stylize engines (--engine):
   flux2-klein   FLUX.2 [klein] edit model. Needs models/diffusion_models/flux2-klein-base-9b-fp8.safetensors,
                 models/text_encoders/flux2_klein_qwen3_text_encoder.safetensors and
                 models/vae/flux2_vae.safetensors. Large model, slow without a lot of VRAM.
+  iris3b        Iris-3B pixel-space text-to-image (speridlabs/iris-3b), GGUF-quantized, no reference-image
+                conditioning. Needs the unofficial ComfyUI-Iris-3B custom node (github.com/RealRebelAI/ComfyUI-Iris-3B,
+                setup.bat clones it + runs its install_iris_source.py) plus the GGUF checkpoint at
+                models/checkpoints/Iris-3B/Iris-3B-Q4_K_S.gguf (0-download-all.bat grabs it from
+                huggingface.co/realrebelai/iris-3b_GGUFs; Q3/Q5/Q6 variants are alternatives, smaller/faster
+                vs. higher quality). The Qwen3-VL-4B-Instruct text encoder downloads itself via transformers on
+                first use. Unlike the other engines above, neither the GGUF DiT nor the text encoder use ComfyUI's
+                VRAM/CPU model streaming - they load whole onto one device, but the GGUF weights are small enough
+                (~1.7 GB) that this still fits the RTX 2060's 6 GB, unlike iris3b's un-quantized fp32 weights (~12 GB).
+                Both the node and the quantization are days old and experimental; expect rough edges.
 """
 import argparse
 import io
@@ -45,7 +55,7 @@ from scipy import ndimage
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from common import llm  # noqa: E402
+from common import llm, log  # noqa: E402
 
 COMFY_DIR = HERE.parent / "ComfyUI_windows_portable" / "ComfyUI"
 COMFY_URL = "http://127.0.0.1:8188"
@@ -70,6 +80,7 @@ ENGINES = {
     "photomaker": "sticker_workflow_photomaker_api.json",
     "qwen-image21": "sticker_workflow_qwen_image21_api.json",
     "flux2-klein": "sticker_workflow_flux2_klein_api.json",
+    "iris3b": "sticker_workflow_iris3b_api.json",
 }
 
 
@@ -162,6 +173,10 @@ def stylize(img, subject, expression, seed, strength, idx, engine):
         wf["6"]["inputs"]["text"] = wf["6"]["inputs"]["text"].replace("SUBJECT", subject)
         wf["11"]["inputs"]["width"], wf["11"]["inputs"]["height"] = w, h
         wf["12"]["inputs"]["seed"] = seed
+    elif engine == "iris3b":
+        prompt = wf["2"]["inputs"]["prompt"].replace("SUBJECT", look)
+        wf["2"]["inputs"]["prompt"] = prompt.replace("EXPRESSION", expression or "smiling happily")
+        wf["3"]["inputs"]["seed"] = seed
 
     pid = http_json(f"{COMFY_URL}/prompt", {"prompt": wf})["prompt_id"]
     while True:
@@ -373,7 +388,7 @@ def main():
                 stickers = llm_stickers
             print(f"[caption] subject: {subject}")
         else:
-            print("[caption] vision LLM not available (no OPENROUTER_API_KEY / Ollama not running) - no captions")
+            log.warn("caption", "vision LLM not available (no OPENROUTER_API_KEY / Ollama not running) - no captions")
     stickers = (stickers or [{"expression": "", "text": ""}]) * args.count
     count = len(args.text) if args.text else args.count
     if args.no_text:
@@ -381,7 +396,7 @@ def main():
 
     stylize_on = not args.no_stylize
     if stylize_on and not reachable(COMFY_URL):
-        print("[stylize] ComfyUI not running (start-comfyui.bat) - using original image")
+        log.warn("stylize", "ComfyUI not running (start-comfyui.bat) - using original image")
         stylize_on = False
     # the real subject cut out of the photo: color reference for the drawn stickers
     ref = cut_out(src) if stylize_on else None

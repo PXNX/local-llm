@@ -51,6 +51,11 @@
       "dir": "vae", "file": "flux2_vae.safetensors", "size": 336211292,
       "url": "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/vae/flux2-vae.safetensors", "sha256": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3" },
 
+    { "id": "iris3b-gguf-q4ks", "group": "Iris-3B (GGUF)", "used_by": "Stickers (iris3b), Caricatures/Objects (iris3b)",
+      "dir": "checkpoints/Iris-3B", "file": "Iris-3B-Q4_K_S.gguf", "size": 1686915584,
+      "url": "https://huggingface.co/realrebelai/iris-3b_GGUFs/resolve/main/Iris-3B-Q4_K_S.gguf", "sha256": "6f47fc8a78ee791a979a9a298cd0cff60ecff3531ff17069d2abece12e4543de",
+      "note": "Recommended quant. Q3_K_S (smaller/faster) and Q5_K_S/Q6_K (higher quality) also exist in the same repo if you want to try them by hand. Needs the ComfyUI-Iris-3B custom node (setup.bat clones it); the Qwen3-VL-4B-Instruct text encoder downloads itself via transformers into HF_HOME on first use - no separate file here." },
+
     { "id": "flux1-dev", "group": "Extra (ComfyUI UI only)", "used_by": "ComfyUI in the browser",
       "dir": "diffusion_models", "file": "flux1-dev-Q4_K_S.gguf", "size": 6805988640,
       "url": "https://huggingface.co/city96/FLUX.1-dev-gguf/resolve/main/flux1-dev-Q4_K_S.gguf", "sha256": "75bb19459b5240c9f373b5af527584af15b675867fa142efadf7478d6abbf62b" },
