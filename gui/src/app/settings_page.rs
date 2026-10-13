@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, RichText};
 
-use super::{App, FreeModels, or_default};
+use super::{App, FreeModels, or_default, setup};
 use crate::envfile::{self, EnvVar};
 use crate::flows::Provider;
 use crate::health;
@@ -234,6 +234,15 @@ impl App {
         let root = r.paths.root.clone();
         let python = r.paths.python();
         Self::section(ui, icons::TOOLS, "Installation");
+        ui.horizontal(|ui| {
+            ui.label(format!("local-llm GUI v{}", setup::VERSION));
+            if ui::button(ui, icons::GITHUB, "GitHub").on_hover_text(setup::REPO_WEB).clicked() {
+                sys::open_url(setup::REPO_WEB);
+            }
+            if ui::button(ui, icons::OPEN_IN_NEW, "Releases").on_hover_text("newer local-llm.exe builds").clicked() {
+                sys::open_url(setup::RELEASES_URL);
+            }
+        });
         ui.horizontal(|ui| {
             ui.label("local-llm folder:");
             if ui.link(root.display().to_string()).clicked() {

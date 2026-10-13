@@ -12,7 +12,11 @@ use crate::paths;
 use crate::sys;
 use crate::ui::{self, AMBER, GREEN};
 
-pub const REPO_URL: &str = "https://github.com/PXNX/local-llm.git";
+pub const REPO_WEB: &str = "https://github.com/PXNX/local-llm";
+pub const REPO_URL: &str = const_format::concatcp!(REPO_WEB, ".git");
+pub const RELEASES_URL: &str = const_format::concatcp!(REPO_WEB, "/releases");
+/// GUI version from gui/Cargo.toml (release.bat bumps it, the release tag is v<VERSION>)
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 impl App {
     /// Dialog listing what a flow still lacks: env vars to type in and models to download.

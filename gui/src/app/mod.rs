@@ -308,6 +308,12 @@ impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("local-llm").size(18.0).strong());
+            if ui.link(RichText::new(format!("v{}", setup::VERSION)).small()).on_hover_text("GUI version - open the releases").clicked() {
+                crate::sys::open_url(setup::RELEASES_URL);
+            }
+            if ui::tool(ui, icons::GITHUB, "local-llm on GitHub").clicked() {
+                crate::sys::open_url(setup::REPO_WEB);
+            }
             ui.separator();
             for server in [Server::Ollama, Server::Comfy] {
                 let up = self.servers.up(server);
