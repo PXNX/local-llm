@@ -6,6 +6,7 @@ damaged) and hand-made sets like caricatures/out/ww3/<thing>/cutout.png.
 Missing drawings are made with caricatures/make_caricatures.py (FLUX.1 in ComfyUI) when it runs.
 """
 import hashlib
+import io
 import math
 import re
 import sys
@@ -25,7 +26,20 @@ FACE_PROMPTS = dict(zip(["neutral", "laughing", "angry", "shocked", "smug", "cry
 STATE_PROMPTS = {"normal": mc.VIEWS[0], "fire": mc.VIEWS[2], "damaged": mc.VIEWS[3]}
 STATE_WORDS = {"normal": ("side_view", "three_quarter", "cutout"), "fire": ("fire", "burning"),
                "damaged": ("damaged", "broken", "destroyed")}
-IMG_EXT = (".png", ".webp")
+IMG_EXT = (".png", ".webp", ".svg")
+
+
+def render_svg(svg, height):
+    """Rasterizes SVG markup at the given pixel height (transparent background)."""
+    import resvg_py
+    return Image.open(io.BytesIO(bytes(resvg_py.svg_to_bytes(svg_string=svg, height=max(1, int(height)))))).convert("RGBA")
+
+
+def open_image(path, height=1024):
+    """A drawing as a PIL image; SVGs are rasterized at the given height."""
+    if Path(path).suffix.lower() == ".svg":
+        return render_svg(Path(path).read_text(encoding="utf-8"), height)
+    return Image.open(path)
 
 
 def _tokens(text):
