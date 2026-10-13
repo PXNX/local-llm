@@ -9,7 +9,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
@@ -636,14 +636,94 @@ def encode(plan, audio_wav, out, workers, preset, crf, tmp):
     return video
 
 
+THUMB_FACES = ["shocked", "angry", "crying", "laughing", "smug", "neutral"]
+
+
+def _thumb_cast(plan):
+    """The (up to) two characters with the most lines, each in their most expressive drawn face."""
+    count = {}
+    for ln in plan["lines"]:
+        count[ln["who"]] = count.get(ln["who"], 0) + 1
+    names = sorted(count, key=lambda n: -count[n])[:2]
+    names.sort(key=lambda n: next(i for i, ln in enumerate(plan["lines"]) if ln["who"] == n))
+    out = []
+    for name in names:
+        paths = plan["sprites"].get(name, {})
+        face = next((f for f in THUMB_FACES if paths.get(f) and
+                     cast_mod._variant_key(cast_mod.FACE_PROMPTS[f]) in Path(paths[f]).stem), None)
+        out.append((name, face or next((f for f in THUMB_FACES if paths.get(f)), "shocked")))
+    return out
+
+
+def _thumb_thing(plan):
+    """The object of the punchline: the one that burns (explodes or gets hit), else any object."""
+    things = [it for sc in plan["scenes"] for it in sc["items"] if it["type"] == "thing"]
+    return next((it["name"] for it in things if any(s == "burning" for _, s in it["states"])),
+                things[0]["name"] if things else None)
+
+
+def _sticker(im, border):
+    """Cutout with a thick white outline and a soft dark drop shadow, like a sticker."""
+    pad = border * 3
+    a = Image.new("L", (im.width + 2 * pad, im.height + 2 * pad))
+    a.paste(im.getchannel("A"), (pad, pad))
+    grown = a.filter(ImageFilter.MaxFilter(border * 2 + 1))
+    out = Image.new("RGBA", a.size, (0, 0, 0, 0))
+    shadow = grown.filter(ImageFilter.GaussianBlur(border)).point(lambda v: v * 0.55)
+    out.paste((0, 0, 0, 255), (border, border), shadow)
+    out.paste((255, 255, 255, 255), (0, 0), grown)
+    out.alpha_composite(im, (pad, pad))
+    return out
+
+
 def thumbnail(plan, path):
-    """Cover: a close-up moment with the title on it."""
+    """Cover: comic sunburst, the punchline object burning on an explosion in the middle, the two main
+    characters big in their most expressive face on either side, and the title on top."""
     r = Renderer(plan)
-    t = next((l["t0"] + 0.5 for l in plan["lines"]), plan["total"] / 3)
-    im = r.frame(t).convert("RGBA")
-    f = top5.font(int(r.unit * 0.13))
-    title = top5.fit_width(top5.fancy_text(plan["title"].upper(), f, "#FFFFFF", "#FFD400",
-                                           stroke=max(5, r.unit // 90), shadow=max(5, r.unit // 90)), r.W * 0.92)
-    im.alpha_composite(title, (int((r.W - title.width) / 2), int(r.H * 0.04)))
+    W, H, u = r.W, r.H, r.unit
+    im = Image.new("RGBA", (W, H), "#FFC21A")
+    d = ImageDraw.Draw(im)
+    cx, cy = W / 2, H * 0.58
+    rays, far = 18, math.hypot(W, H)
+    for i in range(rays):
+        a0, a1 = 2 * math.pi * i / rays, 2 * math.pi * (i + 0.5) / rays
+        d.polygon([(cx, cy), (cx + far * math.cos(a0), cy + far * math.sin(a0)),
+                   (cx + far * math.cos(a1), cy + far * math.sin(a1))], fill="#FF8A1F")
+    vignette = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(vignette).ellipse((-W * 0.25, -H * 0.35, W * 1.25, H * 1.35), fill=255)
+    vignette = vignette.filter(ImageFilter.GaussianBlur(u * 0.12))
+    im = Image.composite(im, Image.new("RGBA", (W, H), "#B8300E"), vignette)
+    d = ImageDraw.Draw(im)
+    lw = max(3, int(u / 160))
+
+    thing = _thumb_thing(plan)
+    if thing:
+        for col, rr, pts in (((255, 70, 30), 0.42, 14), ((255, 160, 30), 0.31, 12), ((255, 236, 110), 0.19, 10)):
+            d.polygon(cast_mod.star_points(cx, cy, H * rr, pts, 0.62, rr * 3), fill=col,
+                      outline="black" if rr == 0.42 else None, width=lw)
+        paths = plan["sprites"].get(thing, {})
+        state = "fire" if paths.get("fire") else "normal"
+        th = H * (0.18 if cast_mod.missile_like(thing) else 0.40)
+        spr = r.sprite(thing, state, "thing", th / ZOOM_MAX * 1.2)
+        th_im = _sticker(spr.get(th * spr.aspect, th), max(4, int(u * 0.008)))
+        fx, fy = cx, cy + th * 0.55
+        im.alpha_composite(th_im, (int(fx - th_im.width / 2), int(fy - th_im.height + th_im.height * 0.06)))
+        if state != "fire":
+            r.flames(im, fx, fy - th, th * spr.aspect, th, 1.3, 2.0)
+
+    cast = _thumb_cast(plan)
+    slots = [(0.16, 6), (0.84, -6)] if len(cast) == 2 else [(0.2, 4)]
+    for (name, face), (x, tilt) in zip(cast, slots):
+        ch = H * 0.74
+        spr = r.sprite(name, face, "char", ch / ZOOM_MAX * 1.2)
+        c_im = _sticker(spr.get(ch * spr.aspect, ch), max(6, int(u * 0.012)))
+        c_im = c_im.rotate(tilt, resample=Image.BICUBIC, expand=True)
+        im.alpha_composite(c_im, (int(W * x - c_im.width / 2), int(H * 1.07 - c_im.height)))
+
+    f = top5.font(int(u * 0.17))
+    title = top5.fancy_text(plan["title"].upper(), f, "#FFFFFF", "#FFD400",
+                            stroke=max(6, u // 70), shadow=max(6, u // 70))
+    title = top5.fit_width(title, W * 0.92).rotate(-3, resample=Image.BICUBIC, expand=True)
+    im.alpha_composite(title, (int((W - title.width) / 2), int(H * 0.03)))
     im.convert("RGB").save(path, quality=92)
     return path
