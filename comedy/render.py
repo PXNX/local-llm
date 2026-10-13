@@ -8,6 +8,7 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 HERE = Path(__file__).resolve().parent
@@ -91,11 +92,53 @@ class Sprite:
         return im
 
 
+class Rig:
+    """A character cutout auto-split at the neck into a head and a body Sprite, so the head can nod
+    and bob on its own instead of the whole cutout squashing as one piece (--limbs).
+
+    The neck is found as the narrowest silhouette row in a plausible band, measured only in the
+    middle third of the width so a raised arm or pointing hand off to the side can't be mistaken
+    for it. Generated caricatures vary a lot in crop and pose (bust shot vs. full body, arms up or
+    down), so when no confident narrowing shows up - or it lands somewhere implausible - this falls
+    back to/clamps toward a middle guess rather than risk cutting through the face."""
+
+    OVERLAP = 0.06
+    FALLBACK = 0.6
+
+    def __init__(self, img, max_h):
+        img = img.convert("RGBA")
+        box = img.getchannel("A").getbbox()
+        if box:
+            img = img.crop(box)
+        h, w = img.height, img.width
+        a = np.asarray(img.getchannel("A"))
+        widths = (a[:, int(w * 0.32):int(w * 0.68)] > 16).sum(axis=1).astype(float)
+        win = max(5, h // 45)
+        smooth = np.convolve(widths, np.ones(win) / win, mode="same")
+        lo, hi = int(h * 0.30), int(h * 0.88)
+        confirm = max(3, h // 30)
+        seam = self.FALLBACK
+        best_y, best_w = lo, smooth[lo] if lo < len(smooth) else 0
+        for y in range(lo, max(lo, hi - confirm)):
+            if smooth[y] < best_w:
+                best_y, best_w = y, smooth[y]
+            elif best_w > 0 and smooth[y:y + confirm].min() > best_w * 1.15:
+                seam = min(0.76, max(0.48, best_y / h))
+                break
+        y = int(h * seam)
+        pad = max(1, int(h * self.OVERLAP))
+        self.head_frac = min(0.85, seam + self.OVERLAP)
+        self.body_frac = min(0.95, 1 - seam + self.OVERLAP)
+        self.head = Sprite(img.crop((0, 0, img.width, min(h, y + pad))), max_h * self.head_frac)
+        self.body = Sprite(img.crop((0, max(0, y - pad), img.width, h)), max_h * self.body_frac)
+
+
 class Renderer:
     def __init__(self, plan):
         self.p = plan
         self.W, self.H = plan["W"], plan["H"]
         self.sprites = {}
+        self.rigs = {}
         self.bgs = {}
         self.bg_view = (None, None)
         self.subs = {}
@@ -124,6 +167,14 @@ class Renderer:
                 img = cast_mod.placeholder_thing(name, state)
             self.sprites[key] = Sprite(img, h * ZOOM_MAX)
         return self.sprites[key]
+
+    def rig(self, name, state, h):
+        key = (name, state)
+        if key not in self.rigs:
+            path = self.p["sprites"].get(name, {}).get(state)
+            img = Image.open(path) if path else cast_mod.placeholder_person(name, state)
+            self.rigs[key] = Rig(img, h * ZOOM_MAX)
+        return self.rigs[key]
 
     def background(self, si):
         if si not in self.bgs:
@@ -200,15 +251,16 @@ class Renderer:
                          self.handle_img)
         return canvas
 
-    def pose(self, it, t):
-        """(dx, dy, angle, sx, sy, alpha-scale) from actions, talking and idle breathing."""
+    def pose(self, it, t, talk=True):
+        """(dx, dy, angle, sx, sy, alpha-scale) from actions, talking and idle breathing. talk=False
+        (rig mode) leaves the talk wobble to head_wobble() instead, so the head can move on its own."""
         h = it["h"]
         dx = dy = ang = 0.0
         sx = sy = 1.0
         scale = 1.0
         phase = (hash(it["name"]) % 100) / 16
         sy *= 1 + 0.008 * math.sin(t * 2 * math.pi * 0.45 + phase)
-        if it["type"] == "char":
+        if talk and it["type"] == "char":
             for ln in self.p["lines"]:
                 if ln["who"] == it["name"] and ln["t0"] <= t < ln["t1"]:
                     env = ln["env"]
@@ -263,8 +315,27 @@ class Renderer:
             ang += fallen * (1 if it["x"] < self.W / 2 else -1)
         return dx, dy, ang, sx, sy, scale
 
+    def head_wobble(self, it, t):
+        """Extra nod/bob for the head layer only (rig mode), on top of the shared body pose: a
+        talk-driven nod while a line plays, plus a slow idle tilt so it isn't static between lines."""
+        ang = dy = 0.0
+        phase = (hash(it["name"]) % 100) / 16 + 10
+        for ln in self.p["lines"]:
+            if ln["who"] == it["name"] and ln["t0"] <= t < ln["t1"]:
+                env = ln["env"]
+                a = env[min(len(env) - 1, int((t - ln["t0"]) * self.p["fps"]))]
+                a = round(a * 8) / 8
+                ang += 3.5 * a * math.sin(t * 9 + phase)
+                dy -= 0.05 * it["h"] * a * abs(math.sin(t * 9 + phase))
+                break
+        ang += 1.5 * math.sin(t * 2 * math.pi * 0.18 + phase)
+        return ang, dy
+
     def draw_item(self, canvas, it, t, to_screen, z):
         if not at(it["visible"], t, True):
+            return
+        if it["type"] == "char" and self.p.get("rig"):
+            self.draw_rig(canvas, it, t, to_screen, z)
             return
         dx, dy, ang, sx, sy, scale = self.pose(it, t)
         if it["type"] == "char":
@@ -283,6 +354,25 @@ class Renderer:
         if it["type"] == "thing" and at(it["states"], t, "normal") == "burning":
             since = t - next(st for st, s in it["states"] if s == "burning")
             self.flames(canvas, fx, fy - h, w, h, t, since)
+
+    def draw_rig(self, canvas, it, t, to_screen, z):
+        """Body pasted at the feet as usual, head pasted separately on top of it with its own extra
+        nod/bob (head_wobble) so it reads as two posable parts instead of one squashed cutout."""
+        dx, dy, ang, sx, sy, scale = self.pose(it, t, talk=False)
+        state = at(it["faces"], t, "neutral")
+        rg = self.rig(it["name"], state, it["h"])
+        total_h = it["h"] * z * sy * scale
+        if total_h < 2:
+            return
+        fx, fy = to_screen(it["x"] + dx, it["y"] + dy)
+        body_h = total_h * rg.body_frac
+        body_w = body_h * rg.body.aspect * abs(sx) / sy
+        self.paste(canvas, rg.body.get(body_w, body_h), fx, fy, ang, mirror=sx < 0)
+        head_ang, head_dy = self.head_wobble(it, t)
+        head_h = total_h * rg.head_frac
+        head_w = head_h * rg.head.aspect * abs(sx) / sy
+        neck_fy = fy - body_h + head_h * Rig.OVERLAP + head_dy
+        self.paste(canvas, rg.head.get(head_w, head_h), fx, neck_fy, ang + head_ang, mirror=sx < 0)
 
     def paste(self, canvas, im, fx, fy, ang=0.0, mirror=False):
         """Paste with the bottom-centre (feet) at (fx, fy), rotated around the feet."""

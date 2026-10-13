@@ -23,6 +23,7 @@ pub struct Comedy {
     format: String,
     draw_missing: bool,
     use_screenshots: bool,
+    limbs: bool,
     music: String,
     subtitles: bool,
     end_card: bool,
@@ -47,6 +48,7 @@ impl Default for Comedy {
             format: "landscape".into(),
             draw_missing: true,
             use_screenshots: false,
+            limbs: false,
             music: "calm".into(),
             subtitles: true,
             end_card: true,
@@ -133,6 +135,9 @@ impl Flow for Comedy {
                 ui.checkbox(&mut self.end_card, "end card (title + subscribe)");
             });
             ui.end_row();
+            w::label(ui, "Animation", "splits each cutout at the neck automatically, no extra drawings needed");
+            ui.checkbox(&mut self.limbs, "head moves independently (nod/bob while talking)");
+            ui.end_row();
             w::label(ui, "Channel name", "shown top right");
             ui.add(egui::TextEdit::singleline(&mut self.handle).hint_text("e.g. @mychannel"));
             ui.end_row();
@@ -182,6 +187,7 @@ impl Flow for Comedy {
         }
         flag(&mut a, "--no-generate", !self.draw_missing);
         flag(&mut a, "--use-screenshots", self.use_screenshots);
+        flag(&mut a, "--limbs", self.limbs);
         if self.music != d.music {
             opt(&mut a, "--music", &self.music);
         }
