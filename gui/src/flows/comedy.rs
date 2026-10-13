@@ -4,9 +4,12 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use super::widgets as w;
-use super::{FLUX1, Flow, Llm, Needs, each, filled, flag, num, opt, out_or, required_file};
+use super::{FLUX1, Flow, Llm, Needs, flag, num, opt, out_or, required_file};
+use crate::icons;
+use crate::ui;
 
 const SCRIPTS: (&str, &[&str]) = ("Sketch script", &["json"]);
+const CHARACTERS_TIP: &str = "empty = the LLM picks 2-3 fitting leaders; a picture (e.g. from the Characters flow) is used instead of a caricature; personality (how they talk and act) shapes the dialogue, voice and animation";
 
 /// Flow 12: political comedy cartoon sketches (comedy/make_comedy.py).
 #[derive(Serialize, Deserialize)]
@@ -16,6 +19,10 @@ pub struct Comedy {
     topic: String,
     script: String,
     cast: Vec<String>,
+    /// Optional picture per character, aligned with `cast` (empty = none).
+    cast_images: Vec<String>,
+    /// Optional personality per character, aligned with `cast` (e.g. "boastful, repeats himself").
+    cast_personality: Vec<String>,
     lang: String,
     seconds: u32,
     write_only: bool,
@@ -24,6 +31,7 @@ pub struct Comedy {
     draw_missing: bool,
     use_screenshots: bool,
     limbs: bool,
+    art: String,
     music: String,
     subtitles: bool,
     end_card: bool,
@@ -41,6 +49,8 @@ impl Default for Comedy {
             topic: String::new(),
             script: String::new(),
             cast: Vec::new(),
+            cast_images: Vec::new(),
+            cast_personality: Vec::new(),
             lang: "English".into(),
             seconds: 60,
             write_only: false,
@@ -49,7 +59,8 @@ impl Default for Comedy {
             draw_missing: true,
             use_screenshots: false,
             limbs: false,
-            music: "calm".into(),
+            art: "raster".into(),
+            music: "auto".into(),
             subtitles: true,
             end_card: true,
             handle: String::new(),
@@ -73,7 +84,7 @@ impl Flow for Comedy {
         "comedy/make_comedy.py"
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _root: &Path) {
+    fn ui(&mut self, ui: &mut egui::Ui, root: &Path) {
         w::form(ui, "comedy", |ui| {
             w::label(ui, "Sketch", "write a new one, or render a script.json written earlier (edit it in between)");
             ui.horizontal(|ui| {
@@ -93,8 +104,8 @@ impl Flow for Comedy {
                         .hint_text("e.g. Putin explains why the refineries keep burning"),
                 );
                 ui.end_row();
-                w::label(ui, "Characters", "empty = the LLM picks 2-3 fitting leaders");
-                w::list(ui, "cast", &mut self.cast, "e.g. Trump", None, false);
+                w::label(ui, "Characters", CHARACTERS_TIP);
+                self.cast_rows(ui, root);
                 ui.end_row();
                 w::label(ui, "Language", "Kokoro voices: English, Spanish, French, Italian, Portuguese, Hindi, Japanese, Chinese; others use the Windows voices");
                 w::language(ui, "comedy-lang", &mut self.lang);
@@ -126,8 +137,21 @@ impl Flow for Comedy {
                 ui.checkbox(&mut self.use_screenshots, "use flow 6 screenshots (the channel's own designs - not for publishing)");
             });
             ui.end_row();
-            w::label(ui, "Music", "quiet bed, ducks under the dialogue");
-            w::choice(ui, "comedy-music", &mut self.music, &[("calm", "calm"), ("funny", "bouncy"), ("none", "none")]);
+            w::label(ui, "Drawings as", "SVG: an existing .svg next to a drawing is used, else it is traced once and cached");
+            w::choice(
+                ui,
+                "comedy-art",
+                &mut self.art,
+                &[("raster", "raster bitmaps (default)"), ("svg", "SVG vectors (sharp zooms, slower render)")],
+            );
+            ui.end_row();
+            w::label(ui, "Music", "quiet bed, ducks under the dialogue; auto = a mood per scene picked by the LLM");
+            w::choice(
+                ui,
+                "comedy-music",
+                &mut self.music,
+                &[("auto", "auto (fits each scene)"), ("calm", "calm"), ("funny", "bouncy"), ("none", "none")],
+            );
             ui.end_row();
             w::label(ui, "Extras", "");
             ui.vertical(|ui| {
@@ -176,7 +200,24 @@ impl Flow for Comedy {
                 return Err("enter a topic".into());
             }
             opt(&mut a, "--topic", &self.topic.replace(['\r', '\n'], " "));
-            each(&mut a, "--cast", &filled(&self.cast));
+            for (i, name) in self.cast.iter().enumerate() {
+                let name = name.trim();
+                if name.is_empty() {
+                    continue;
+                }
+                let picture = self.cast_images.get(i).map(|p| p.trim()).filter(|p| !p.is_empty());
+                let value = picture.map_or_else(|| name.to_owned(), |p| format!("{name}={p}"));
+                a.extend(["--cast".into(), value]);
+            }
+            for (i, name) in self.cast.iter().enumerate() {
+                let name = name.trim();
+                let personality = self.cast_personality.get(i).map(|p| p.replace(['\r', '\n'], " ")).unwrap_or_default();
+                let personality = personality.trim();
+                if name.is_empty() || personality.is_empty() {
+                    continue;
+                }
+                a.extend(["--personality".into(), format!("{name}={personality}")]);
+            }
             opt(&mut a, "--lang", &self.lang);
             num(&mut a, "--seconds", self.seconds, d.seconds);
             flag(&mut a, "--write-only", self.write_only);
@@ -188,6 +229,9 @@ impl Flow for Comedy {
         flag(&mut a, "--no-generate", !self.draw_missing);
         flag(&mut a, "--use-screenshots", self.use_screenshots);
         flag(&mut a, "--limbs", self.limbs);
+        if self.art != d.art {
+            opt(&mut a, "--art", &self.art);
+        }
         if self.music != d.music {
             opt(&mut a, "--music", &self.music);
         }
@@ -236,4 +280,88 @@ impl Flow for Comedy {
             self.from_script = true;
         }
     }
+}
+
+impl Comedy {
+    /// Character rows: name, optional picture (file or folder), remove; a personality line under each; then "add character".
+    fn cast_rows(&mut self, ui: &mut egui::Ui, root: &Path) {
+        self.cast_images.resize(self.cast.len(), String::new());
+        self.cast_personality.resize(self.cast.len(), String::new());
+        let start = root.join("characters").join("out");
+        let mut remove = None;
+        ui.vertical(|ui| {
+            let rows = self.cast.iter_mut().zip(self.cast_images.iter_mut()).zip(self.cast_personality.iter_mut());
+            for (i, ((name, image), personality)) in rows.enumerate() {
+                ui.horizontal(|ui| {
+                    ui.push_id(("cast", i), |ui| {
+                        ui.add(egui::TextEdit::singleline(name).hint_text("e.g. Trump").desired_width(150.0));
+                        if ui::button(ui, icons::FILE_SEARCH_OUTLINE, "picture").clicked()
+                            && let Some(p) = pick_picture(&start)
+                        {
+                            *image = p;
+                        }
+                        if ui::button(ui, icons::FOLDER_SEARCH_OUTLINE, "folder").clicked()
+                            && let Some(p) = pick_folder(&start)
+                        {
+                            *image = p;
+                        }
+                        if !image.is_empty() {
+                            let shown = Path::new(image.as_str())
+                                .file_name()
+                                .map_or_else(|| image.clone(), |n| n.to_string_lossy().into_owned());
+                            ui.add_sized(
+                                [120.0, ui.spacing().interact_size.y],
+                                egui::Label::new(shown).truncate(),
+                            )
+                            .on_hover_text(image.as_str());
+                            if ui::tool(ui, icons::CLOSE, "clear picture").clicked() {
+                                image.clear();
+                            }
+                        }
+                        if ui::tool(ui, icons::DELETE_OUTLINE, "remove character").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.push_id(("personality", i), |ui| {
+                        ui.add_space(ui.spacing().indent);
+                        ui.add(
+                            egui::TextEdit::singleline(personality)
+                                .hint_text("personality, e.g. boastful, repeats himself")
+                                .desired_width(420.0),
+                        );
+                    });
+                });
+            }
+            if ui::button(ui, icons::PLUS, "add character").clicked() {
+                self.cast.push(String::new());
+                self.cast_images.push(String::new());
+                self.cast_personality.push(String::new());
+            }
+        });
+        if let Some(i) = remove {
+            self.cast.remove(i);
+            self.cast_images.remove(i);
+            self.cast_personality.remove(i);
+        }
+    }
+}
+
+/// File dialog for a character picture (PNG/WebP/SVG), starting in the Characters flow output.
+fn pick_picture(start: &Path) -> Option<String> {
+    let mut d = rfd::FileDialog::new().add_filter("Pictures", &["png", "webp", "svg"]);
+    if start.is_dir() {
+        d = d.set_directory(start);
+    }
+    d.pick_file().map(|p| p.display().to_string())
+}
+
+/// Folder dialog for a character's drawings, starting in the Characters flow output.
+fn pick_folder(start: &Path) -> Option<String> {
+    let mut d = rfd::FileDialog::new();
+    if start.is_dir() {
+        d = d.set_directory(start);
+    }
+    d.pick_folder().map(|p| p.display().to_string())
 }

@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "soundfx"))
 sys.path.insert(0, str(REPO / "topvideos"))
 import generate_sfx as fx  # noqa: E402
+import score  # noqa: E402
 import soundtrack as st  # noqa: E402
 from voice import read_wav, resample, write_wav  # noqa: E402
 from common import log  # noqa: E402
@@ -104,8 +105,51 @@ GAIN = {"explosion": 0.8, "big_explosion": 0.9, "launch": 0.5, "whoosh": 0.5, "p
         "rimshot": 0.5, "crickets": 0.6, "sad_trombone": 0.5, "ding": 0.5, "slap": 0.6}
 
 
-def mix(path, total, lines, effects, music="calm", seed=0):
-    """lines: (start, mono audio, pan -1..1); effects: (start, name). Writes a 16-bit stereo WAV."""
+XFADE = 0.8
+
+
+def _box(x, k):
+    """Moving average, same result as np.convolve(x, np.ones(k) / k, "same") but O(n)."""
+    c = np.concatenate([[0.0], np.cumsum(x)])
+    i = np.arange(x.size) + (k - 1) // 2
+    return (c[np.minimum(i + 1, x.size)] - c[np.clip(i - k + 1, 0, x.size)]) / k
+
+
+def scored(total, scenes, seed=0):
+    """Music bed following the scenes' moods (plan scenes: t0, t1, music, end): one bed per run of
+    scenes with the same mood, equal-power crossfades between them, a sting going into the end card."""
+    n = int(round(total * SR))
+    out = np.zeros((2, n))
+    runs = []
+    for sc in scenes:
+        mood = sc.get("music") or "deadpan"
+        if runs and runs[-1][2] == mood:
+            runs[-1][1] = sc["t1"]
+        else:
+            runs.append([sc["t0"], sc["t1"], mood])
+    for i, (t0, t1, mood) in enumerate(runs):
+        if mood == "none":
+            continue
+        a = max(0.0, t0 - XFADE / 2) if i else 0.0
+        b = min(total, t1 + XFADE / 2) if i < len(runs) - 1 else total
+        i0 = int(round(a * SR))
+        part = score.bed(mood, b - a, seed + i)[:, :n - i0]
+        k = min(int(XFADE * SR), part.shape[1])
+        x = np.linspace(0, np.pi / 2, k)
+        if i:
+            part[:, :k] *= np.sin(x)
+        if i < len(runs) - 1:
+            part[:, part.shape[1] - k:] *= np.cos(x)
+        out[:, i0:i0 + part.shape[1]] += part
+    last = next((i for i, sc in enumerate(scenes) if sc.get("end")), None)
+    if last and scenes[last - 1].get("music") != "none":
+        st._add(out, score.sting(scenes[last - 1].get("music"), seed) * score.RMS * 4, scenes[last]["t0"] - 0.1)
+    return out
+
+
+def mix(path, total, lines, effects, music="calm", seed=0, scenes=None):
+    """lines: (start, mono audio, pan -1..1); effects: (start, name). Writes a 16-bit stereo WAV.
+    music: auto (moods of the plan scenes, see scored()), calm, funny or none."""
     n = int(round(total * SR))
     out = np.zeros((2, n + 3 * SR))
     speech = np.zeros(n + 3 * SR)
@@ -123,14 +167,17 @@ def mix(path, total, lines, effects, music="calm", seed=0):
         st._add(out, np.stack([a, a]), max(0.0, at))
     out = out[:, :n]
     if music != "none":
-        bed, _ = st.music(total, "funny" if music == "funny" else "cute", seed)
+        if music == "auto" and scenes:
+            bed = scored(total, scenes, seed) / score.RMS * 0.25  # the level of the calm bed
+        else:
+            bed, _ = st.music(total, "funny" if music == "funny" else "cute", seed)
         # duck: fast attack, slow release envelope of the dialogue
         env = speech[:n]
         k = int(0.05 * SR)
-        env = np.convolve(env, np.ones(k) / k, mode="same")
+        env = _box(env, k)
         talking = np.clip(env / 0.02, 0, 1)
         k = int(0.4 * SR)
-        talking = np.convolve(talking, np.ones(k) / k, mode="same")
+        talking = _box(talking, k)
         gain = 0.16 - 0.10 * talking
         out += bed[:, :n] * gain
     out = np.tanh(out * 1.1)

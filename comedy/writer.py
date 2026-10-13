@@ -16,6 +16,18 @@ SHOTS = ["wide", "medium", "close"]
 SFX = ["explosion", "big_explosion", "launch", "whoosh", "pop", "boing", "rimshot", "crickets",
        "sad_trombone", "ding", "slap"]
 BACKGROUNDS = ["plain", "room", "city", "field", "night"]
+MOODS = ["deadpan", "bouncy", "tense", "pompous", "sad", "sneaky", "triumphant", "none"]
+MOOD_ALIASES = {
+    "calm": "deadpan", "dry": "deadpan", "awkward": "deadpan", "neutral": "deadpan", "quiet": "deadpan",
+    "funny": "bouncy", "happy": "bouncy", "playful": "bouncy", "upbeat": "bouncy", "cheerful": "bouncy",
+    "comic": "bouncy", "silly": "bouncy", "dramatic": "tense", "suspense": "tense", "scary": "tense",
+    "ominous": "tense", "danger": "tense", "action": "tense", "war": "tense", "march": "pompous",
+    "military": "pompous", "patriotic": "pompous", "anthem": "pompous", "royal": "pompous", "regal": "pompous",
+    "proud": "pompous", "melancholy": "sad", "tragic": "sad", "gloomy": "sad", "spy": "sneaky",
+    "sneak": "sneaky", "mysterious": "sneaky", "stealth": "sneaky", "sly": "sneaky", "scheming": "sneaky",
+    "epic": "triumphant", "heroic": "triumphant", "victory": "triumphant", "celebration": "triumphant",
+    "silence": "none", "silent": "none", "no_music": "none", "off": "none",
+}
 
 EXAMPLE = """{
   "title": "<short funny title about the topic>",
@@ -26,6 +38,7 @@ EXAMPLE = """{
     {
       "background": "<background>",
       "label": "<optional CAPS word or empty>",
+      "music": "<music>",
       "stage": ["<name or thing>", "<name or thing>"],
       "beats": [
         {"who": "<name>", "say": "<line>", "face": "<face>", "shot": "<shot>"},
@@ -63,6 +76,10 @@ Rules:
   "gender" male or female
 - scene "background": one of {backgrounds}, "map of <region>" or a short place ("the Kremlin throne
   room", "the Oval Office"); "label": optional short CAPS word shown on it (a country name on a map)
+- scene "music": the mood of its music bed, one of {moods}: deadpan = dry talk, awkward
+  silence (the usual); bouncy = silly fun; tense = threats, missiles, explosions coming; pompous = a leader
+  showing off, parades, summits; sad = defeat, crying; sneaky = secret plans, spies, lies; triumphant =
+  victory, the big win; none = no music
 - scene "stage": left-to-right list of the characters AND things (objects/buildings, e.g. "oil refinery")
   standing in the scene at its start
 - a line beat: "who", "say" (max 15 words), "face", optional "shot", optional "do", optional "react"
@@ -79,14 +96,19 @@ Rules:
 """
 
 
-def write(topic, lang, seconds, cast, known, llm):
+def write(topic, lang, seconds, cast, known, llm, personalities=None):
+    """personalities: {name: how they talk and behave} from --personality, written into the prompt."""
     words = int(seconds * 2.3)
     beats = f"{max(6, seconds // 6)}-{max(10, seconds // 3)}"
-    cast_hint = f"Use these characters: {', '.join(cast)}." if cast else \
+    cast_hint = f"Use these characters, with exactly these names: {', '.join(cast)}." if cast else \
         "Pick the 2-3 world leaders that fit the topic best."
+    if personalities:
+        cast_hint += "\nPersonalities - let every line and action show them:\n" + \
+            "\n".join(f"- {n}: {p}" for n, p in personalities.items())
     prompt = PROMPT.format(topic=topic, lang=lang, seconds=seconds, words=words, beats=beats, cast_hint=cast_hint,
                            known=", ".join(known) or "none", example=EXAMPLE, backgrounds=", ".join(BACKGROUNDS),
-                           faces=", ".join(FACES), actions=", ".join(ACTIONS), sfx=", ".join(SFX))
+                           faces=", ".join(FACES), actions=", ".join(ACTIONS), sfx=", ".join(SFX),
+                           moods=", ".join(MOODS))
     return llm.text_json(prompt, temperature=0.9, ollama_options={"num_predict": 3000, "num_ctx": 8192})
 
 
@@ -105,6 +127,23 @@ def _pick(value, allowed, aliases=None, default=None):
         if a in v or v.startswith(a):
             return a
     return default
+
+
+def _mood(value):
+    """'Military march' -> pompous: a mood, an alias or a word containing one; None if nothing fits."""
+    v = _key(value).replace(" ", "_")
+    return _pick(value, MOODS, MOOD_ALIASES) or next((m for a, m in MOOD_ALIASES.items() if a in v), None)
+
+
+def guess_mood(beats):
+    """Music mood of a scene without one: explosions/launches -> tense, mostly crying -> sad, else deadpan."""
+    if any(b.get("event") in ("explode", "hit") or b.get("sfx") in ("explosion", "big_explosion", "launch")
+           for b in beats):
+        return "tense"
+    faces = [b["face"] for b in beats if b.get("face")] + [f for b in beats for f in (b.get("react") or {}).values()]
+    if faces and faces.count("crying") * 2 > len(faces):
+        return "sad"
+    return "deadpan"
 
 
 def normalize(script):
@@ -129,7 +168,7 @@ def normalize(script):
     for c in script.get("cast") or []:
         if isinstance(c, dict) and c.get("name"):
             m = member(c["name"], c.get("who"), c.get("gender"))
-            for extra in ("voice", "pitch", "speed", "look"):
+            for extra in ("voice", "pitch", "speed", "look", "image", "personality"):
                 if c.get(extra) not in (None, ""):
                     m[extra] = c[extra]
         elif isinstance(c, str):
@@ -199,8 +238,9 @@ def normalize(script):
         if not beats:
             continue
         bg = str(sc.get("background") or "plain").strip()
+        mood = _mood(sc["music"]) if sc.get("music") not in (None, "") else None
         scenes.append({"background": bg if _key(bg) else "plain", "label": str(sc.get("label") or "").strip()[:24],
-                       "stage": stage, "beats": beats})
+                       "music": mood or guess_mood(beats), "stage": stage, "beats": beats})
     if not scenes:
         raise ValueError("the script has no scenes with beats")
     used = {n for sc in scenes for n in sc["stage"]} | {b.get("who") for sc in scenes for b in sc["beats"]}
@@ -223,7 +263,7 @@ def as_text(script):
     lines = [f"== {script['title']} =="]
     for i, sc in enumerate(script["scenes"], 1):
         lines.append(f"\n[scene {i}: {sc['background']}{' - ' + sc['label'] if sc['label'] else ''}] "
-                     f"stage: {', '.join(sc['stage'])}")
+                     f"music: {sc.get('music', 'deadpan')}, stage: {', '.join(sc['stage'])}")
         for b in sc["beats"]:
             extra = ", ".join(f"{k}={b[k]}" for k in ("face", "do", "shot", "sfx") if k in b)
             if "say" in b:

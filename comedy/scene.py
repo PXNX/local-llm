@@ -177,7 +177,15 @@ def background(kind, text, W, H, scale, seed, path=None):
     rng = random.Random(seed)
     k = kind.lower()
     if path is not None and Path(path).exists():
-        src = Image.open(path).convert("RGB")
+        if Path(path).suffix.lower() == ".svg":  # --art svg: rasterized at (about) the size it covers
+            from cast import render_svg
+            svg = Path(path).read_text(encoding="utf-8")
+            src = render_svg(svg, h)
+            if src.width < w:
+                src = render_svg(svg, h * w / src.width + 1)
+            src = Image.alpha_composite(Image.new("RGBA", src.size, (255, 255, 255, 255)), src).convert("RGB")
+        else:
+            src = Image.open(path).convert("RGB")
         s = max(w / src.width, h / src.height)
         src = src.resize((int(src.width * s) + 1, int(src.height * s) + 1), Image.LANCZOS)
         img = src.crop(((src.width - w) // 2, (src.height - h) // 2, (src.width - w) // 2 + w, (src.height - h) // 2 + h))

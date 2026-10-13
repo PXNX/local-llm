@@ -27,6 +27,9 @@ STATE_PROMPTS = {"normal": mc.VIEWS[0], "fire": mc.VIEWS[2], "damaged": mc.VIEWS
 STATE_WORDS = {"normal": ("side_view", "three_quarter", "cutout"), "fire": ("fire", "burning"),
                "damaged": ("damaged", "broken", "destroyed")}
 IMG_EXT = (".png", ".webp", ".svg")
+FACE_ALIASES = {"happy": "laughing", "laugh": "laughing", "smile": "laughing", "mad": "angry", "surprised": "shocked",
+                "sad": "crying", "cry": "crying", "smirk": "smug", "calm": "neutral"}
+RASTER_EXT = (".png", ".webp")
 
 
 def render_svg(svg, height):
@@ -42,6 +45,31 @@ def open_image(path, height=1024):
     return Image.open(path)
 
 
+def vector(path, preset="logo"):
+    """--art svg: the SVG version of a drawing - an existing <stem>.svg next to it, else the cutout
+    traced with vtracer (vectorize/trace_svg.py preset) and cached there. Transparent stays transparent."""
+    path = Path(path)
+    svg = path.with_suffix(".svg")
+    if path.suffix.lower() == ".svg" or svg.exists():
+        return svg
+    import tempfile
+    import vtracer
+    sys.path.insert(0, str(REPO / "vectorize"))
+    from trace_svg import PRESETS
+    with Image.open(path) as im:
+        rgba = im.convert("RGBA")
+    # hard alpha: vtracer keys out fully transparent pixels but mis-traces semi-transparent ones
+    rgba.putalpha(rgba.getchannel("A").point(lambda v: 255 if v > 128 else 0))
+    print(f"[cast   ] tracing {path.name} -> .svg ...")
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "in.png"
+        rgba.save(src)
+        vtracer.convert_image_to_svg_py(str(src), str(Path(tmp) / "out.svg"), colormode="color",
+                                        hierarchical="stacked", path_precision=8, **PRESETS[preset])
+        svg.write_bytes((Path(tmp) / "out.svg").read_bytes())
+    return svg
+
+
 def _tokens(text):
     return set(re.findall(r"[a-z0-9]+", text.lower().replace("-", " "))) - {"the", "a", "an", "of", "cutout"}
 
@@ -50,18 +78,20 @@ def _variant_key(prompt):
     return mc.slug(prompt.split(",")[0])
 
 
-def _cutouts(folder):
+def _cutouts(folder, ext=IMG_EXT):
     """Transparent drawings in a folder: flow 7/8 *_cutout.png, or <sub>/cutout.png sets."""
     if not folder.is_dir():
         return []
-    files = sorted(p for p in folder.iterdir() if p.suffix.lower() in IMG_EXT and "_cutout" in p.stem)
+    files = sorted(p for p in folder.iterdir() if p.suffix.lower() in ext and "_cutout" in p.stem)
     if not files:
-        files = sorted(p for p in folder.iterdir() if p.suffix.lower() in IMG_EXT and not p.name.startswith("_"))
+        files = sorted(p for p in folder.iterdir() if p.suffix.lower() in ext and not p.name.startswith("_"))
     return files
 
 
 class Cast:
-    def __init__(self, generate=False, use_screenshots=False, seed=0):
+    def __init__(self, generate=False, use_screenshots=False, seed=0, art="raster"):
+        """art: raster = bitmaps only (.svg files ignored), svg = SVGs too (see vector())."""
+        self.ext = IMG_EXT if art == "svg" else RASTER_EXT
         self.generate = generate
         self.use_screenshots = use_screenshots
         self.seed = seed
@@ -70,11 +100,13 @@ class Cast:
     # ------------------------------------------------------------ characters
     def character(self, member, faces):
         """{face: image path or None (placeholder)} for the faces the sketch uses."""
+        if member.get("image") and Path(member["image"]).exists():
+            return self._pictures(Path(member["image"]), faces)
         who = member["who"]
         folders = [CARICATURES / mc.slug(who), CARICATURES / mc.slug(member["name"])]
         found = {}
         for folder in folders:
-            for p in _cutouts(folder):
+            for p in _cutouts(folder, self.ext):
                 for face, prompt in FACE_PROMPTS.items():
                     if p.stem.startswith(f"{folder.name}_{_variant_key(prompt)}_"):
                         found.setdefault(face, p)
@@ -91,6 +123,24 @@ class Cast:
                 out[face] = shots[(i * 7) % len(shots)] if shots else other
         return out
 
+    def _pictures(self, pic, faces):
+        """--cast Name=picture: one file for every face, or a folder's drawings - per face when the file
+        names say which (flow 7 expression or face words), the rest cycled."""
+        if pic.is_file():
+            return {face: pic for face in faces}
+        files = _cutouts(pic, self.ext) or _cutouts(pic)
+        files = list({p.stem: p for p in files}.values())  # x.png + x.svg is one drawing (vector() picks)
+        if not files:
+            return {face: None for face in faces}
+        words = {f: {f, _variant_key(FACE_PROMPTS[f])} | {a for a, v in FACE_ALIASES.items() if v == f}
+                 for f in FACE_PROMPTS}
+        out, rest = {}, iter(files * len(faces))
+        for face in faces:
+            out[face] = next((p for p in files if any(w in p.stem.lower() for w in words.get(face, ()))), None)
+        for face in faces:
+            out[face] = out[face] or next(rest)
+        return out
+
     def _screenshots(self, member):
         """Flow 6 cutouts: characters/out/<folder> whose name or names.txt entry matches."""
         names_txt = REPO / "characters" / "names.txt"
@@ -104,7 +154,7 @@ class Cast:
         for folder in sorted(SCREENSHOTS.iterdir()) if SCREENSHOTS.is_dir() else []:
             have = _tokens(folder.name) | _tokens(aliases.get(folder.name, ""))
             if any(w and w <= have for w in want):
-                files = [p for p in _cutouts(folder) if p.suffix.lower() == ".png"]
+                files = [p for p in _cutouts(folder, self.ext) if p.suffix.lower() == ".png"]
                 if files:
                     return files
         return []
@@ -128,7 +178,7 @@ class Cast:
                     found.setdefault(state, p)
                     break
         if folder is not None and folder.parent != CARICATURES and "damaged" not in found:
-            destroyed = _cutouts(folder.parent / f"{folder.name}-destroyed")  # sets like ww3/tank + ww3/tank-destroyed
+            destroyed = _cutouts(folder.parent / f"{folder.name}-destroyed", self.ext)  # sets like ww3/tank + ww3/tank-destroyed
             if destroyed:
                 found["damaged"] = destroyed[0]
         if files and "normal" not in found:
@@ -154,7 +204,7 @@ class Cast:
             cands = [d] + [s for s in d.iterdir() if s.is_dir() and (s / "cutout.png").exists()]
             for c in cands:
                 have = _tokens(c.name)
-                if not have or not _cutouts(c):
+                if not have or not _cutouts(c, self.ext):
                     continue
                 score = len(want & have) / len(want | have)
                 if c.name.endswith("-destroyed"):
@@ -163,7 +213,7 @@ class Cast:
                     best, best_score = c, score
         if best is None or best_score < 0.34:
             return None, []
-        return best, _cutouts(best)
+        return best, _cutouts(best, self.ext)
 
     def _draw_thing(self, name, state, folder):
         seed = self._seed(name, state)
