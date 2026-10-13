@@ -1,17 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod coding;
 mod config;
 mod envfile;
 mod flows;
 mod fonts;
 mod health;
+mod highlight;
 mod icons;
 mod jobs;
 mod models;
 mod paths;
 mod servers;
 mod sys;
+mod taskbar;
 mod ui;
 
 use eframe::egui;

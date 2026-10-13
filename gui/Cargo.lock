@@ -1467,6 +1467,7 @@ dependencies = [
  "material-design-icons",
  "nvml-wrapper",
  "open",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",

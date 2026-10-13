@@ -37,6 +37,23 @@
             "context": 32768,
             "output": 8192
           }
+        },
+        "local-coder:speed": {
+          "name": "Local coder - speed (qwen3:8b, no thinking)",
+          "limit": {
+            "context": 16384,
+            "output": 8192
+          },
+          "options": {
+            "reasoningEffort": "none"
+          }
+        },
+        "local-coder:quality": {
+          "name": "Local coder - quality (qwen3.8-blend:27b, thinking)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
         }
       }
     }

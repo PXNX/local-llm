@@ -32,7 +32,7 @@ impl Server {
     }
 
     /// ComfyUI loads its nodes first, which takes about a minute on a cold start.
-    fn start_timeout(self) -> Duration {
+    pub fn start_timeout(self) -> Duration {
         match self {
             Server::Ollama => Duration::from_secs(60),
             Server::Comfy => Duration::from_secs(300),
@@ -88,8 +88,29 @@ impl Servers {
 const OLLAMA_ENV: &[(&str, &str)] =
     &[("OLLAMA_FLASH_ATTENTION", "1"), ("OLLAMA_KV_CACHE_TYPE", "q8_0"), ("OLLAMA_MAX_LOADED_MODELS", "1"), ("OLLAMA_NUM_PARALLEL", "1")];
 
-/// Launches the server the same way the .bat flows do. Returns immediately.
-pub fn start(server: Server, root: &Path) -> Result<(), String> {
+/// When each server was last launched. ComfyUI's port stays closed for about a minute while it loads its
+/// nodes; without this every run (or click) in that time opened another ComfyUI window.
+static LAUNCHED: std::sync::Mutex<Vec<(Server, Instant)>> = std::sync::Mutex::new(Vec::new());
+
+/// True while a launch of `server` is less than its start timeout old (it may still be loading).
+pub fn starting(server: Server) -> bool {
+    LAUNCHED.lock().unwrap().iter().any(|(s, at)| *s == server && at.elapsed() < server.start_timeout())
+}
+
+/// Launches the server the same way the .bat flows do. Returns immediately, with the launcher process;
+/// None when a launch is already under way (wait for it with `ensure` instead).
+pub fn start(server: Server, root: &Path) -> Result<Option<std::process::Child>, String> {
+    if starting(server) {
+        return Ok(None);
+    }
+    let child = launch(server, root)?;
+    let mut l = LAUNCHED.lock().unwrap();
+    l.retain(|(s, _)| *s != server);
+    l.push((server, Instant::now()));
+    Ok(Some(child))
+}
+
+fn launch(server: Server, root: &Path) -> Result<std::process::Child, String> {
     match server {
         Server::Ollama => {
             let app = ollama_dir().join("ollama app.exe");
@@ -107,22 +128,23 @@ pub fn start(server: Server, root: &Path) -> Result<(), String> {
             }
             cmd.envs(paths::current_env());
             sys::hide_window(&mut cmd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-            cmd.spawn().map(drop).map_err(|e| format!("could not start Ollama ({e}) - is it installed? (setup.bat)"))
+            cmd.spawn().map_err(|e| format!("could not start Ollama ({e}) - is it installed? (setup.bat)"))
         }
         Server::Comfy => {
             let bat = root.join("start-comfyui.bat");
             if !bat.is_file() {
                 return Err(format!("{} not found", bat.display()));
             }
-            // own minimized console window, like the .bat flows: ComfyUI keeps running when the GUI closes
+            // own minimized console window, like the .bat flows: ComfyUI keeps running when the GUI closes;
+            // "gui" = the window closes when ComfyUI exits, instead of piling up paused windows
             let mut cmd = Command::new("cmd");
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
-                cmd.raw_arg(format!("/C start \"ComfyUI\" /min /normal \"{}\"", bat.display()));
+                cmd.raw_arg(format!("/C start \"ComfyUI\" /min /normal \"{}\" gui", bat.display()));
             }
             sys::hide_window(&mut cmd).current_dir(root).envs(paths::current_env());
-            cmd.spawn().map(drop).map_err(|e| format!("could not start ComfyUI: {e}"))
+            cmd.spawn().map_err(|e| format!("could not start ComfyUI: {e}"))
         }
     }
 }
@@ -132,8 +154,11 @@ pub fn ensure(server: Server, root: &Path, cancel: &AtomicBool, log: &mut dyn Fn
     if is_up(server) {
         return Ok(());
     }
-    log(format!("[gui  ] starting {} ...", server.name()));
-    start(server, root)?;
+    if start(server, root)?.is_some() {
+        log(format!("[gui  ] starting {} ...", server.name()));
+    } else {
+        log(format!("[gui  ] {} is still starting, waiting for it ...", server.name()));
+    }
     let t0 = Instant::now();
     while t0.elapsed() < server.start_timeout() {
         if cancel.load(Ordering::Relaxed) {

@@ -4,7 +4,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use super::widgets as w;
-use super::{Flow, Llm, Needs, WAN5B, filled, num, opt};
+use super::{Flow, Llm, Needs, WAN5B, filled, num, opt, out_or};
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -16,11 +16,21 @@ pub struct Animate {
     prompt: String,
     steps: u32,
     seed: i64,
+    out: String,
 }
 
 impl Default for Animate {
     fn default() -> Self {
-        Self { inputs: Vec::new(), mode: "motion".into(), motion: "auto".into(), seconds: 2.0, prompt: String::new(), steps: 20, seed: 0 }
+        Self {
+            inputs: Vec::new(),
+            mode: "motion".into(),
+            motion: "auto".into(),
+            seconds: 2.0,
+            prompt: String::new(),
+            steps: 20,
+            seed: 0,
+            out: String::new(),
+        }
     }
 }
 
@@ -80,6 +90,10 @@ impl Flow for Animate {
                 ui.add(egui::DragValue::new(&mut self.seed).range(0..=i64::from(i32::MAX)));
                 ui.end_row();
             }
+
+            w::label(ui, "Output folder", "");
+            w::folder(ui, &mut self.out, "default: next to the stickers");
+            ui.end_row();
         });
     }
 
@@ -91,7 +105,8 @@ impl Flow for Animate {
         if let Some(missing) = a.iter().find(|p| !Path::new(p).exists()) {
             return Err(format!("not found: {missing}"));
         }
-        a.extend(["--mode".into(), self.mode.clone()]);
+        // the form's "motion" is the script's CPU-only "loop" mode
+        a.extend(["--mode".into(), if self.mode == "motion" { "loop".into() } else { self.mode.clone() }]);
         if self.mode == "motion" {
             opt(&mut a, "--motion", &self.motion);
         }
@@ -101,6 +116,7 @@ impl Flow for Animate {
             num(&mut a, "--steps", self.steps, 20);
             num(&mut a, "--seed", self.seed, 0);
         }
+        opt(&mut a, "--out", &self.out);
         Ok(a)
     }
 
@@ -113,11 +129,12 @@ impl Flow for Animate {
     }
 
     fn out_dir(&self, root: &Path) -> PathBuf {
-        filled(&self.inputs)
+        let default = filled(&self.inputs)
             .first()
             .map(PathBuf::from)
             .map(|p| if p.is_dir() { p } else { p.parent().map(Path::to_path_buf).unwrap_or(p) })
-            .unwrap_or_else(|| root.join("stickers").join("out"))
+            .unwrap_or_else(|| root.join("stickers").join("out"));
+        out_or(&self.out, default)
     }
 
     fn drop_files(&mut self, files: Vec<PathBuf>) {

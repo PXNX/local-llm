@@ -3,6 +3,8 @@ rem Flow 3: coding LLM in T3 Code (OpenCode or Pi provider).
 rem   Default: free OpenCode Zen cloud model opencode/muse-spark-1.3-contributor-free (no key, no GPU memory)
 rem   Other Zen model:    3-coding-llm-t3code.bat opencode/mimo-v2.6-flash-free
 rem   Local Ollama model: 3-coding-llm-t3code.bat qwen3:8b     (or gpt-oss:20b, qwen3-coder:30b, qwen3.8-blend:27b)
+rem   Tuned local model:  3-coding-llm-t3code.bat speed|quality   (local-coder:speed = qwen3:8b, 16k, no thinking;
+rem                       local-coder:quality = qwen3.8-blend:27b, 32k, thinking - set up in the GUI under Coding)
 rem   Terminal instead of T3 Code:  3-coding-llm-t3code.bat qwen3:8b cli
 rem   Pi coding agent (terminal):   3-coding-llm-t3code.bat qwen3.8-blend:27b pi   (local models in config\pi-models.json)
 rem   Pi in T3 Code: 3-coding-llm-t3code.bat qwen3.8-blend:27b, then provider Pi in the model picker
@@ -17,6 +19,8 @@ if /i "%MODEL:~0,9%"=="opencode/" (
   set "FULL=%MODEL%"
   goto :open
 )
+if /i "%MODEL%"=="speed" set "MODEL=local-coder:speed"
+if /i "%MODEL%"=="quality" set "MODEL=local-coder:quality"
 set "FULL=ollama/%MODEL%"
 
 curl.exe -s -o nul http://127.0.0.1:11434/ || (
@@ -30,6 +34,10 @@ curl.exe -s -o nul http://127.0.0.1:11434/ || (
 )
 :ready
 
+if /i "%MODEL:~0,12%"=="local-coder:" "%OLLAMA%\ollama.exe" list | find /i "%MODEL%" >nul || (
+  echo Building %MODEL% from config\coder-%MODEL:~12%.Modelfile ^(shares the weights, no download^) ...
+  "%OLLAMA%\ollama.exe" create %MODEL% -f "%~dp0config\coder-%MODEL:~12%.Modelfile" || ( pause & exit /b 1 )
+)
 "%OLLAMA%\ollama.exe" list | find /i "%MODEL%" >nul || (
   echo Model %MODEL% is missing, downloading ...
   "%OLLAMA%\ollama.exe" pull %MODEL% || ( pause & exit /b 1 )

@@ -176,12 +176,8 @@ impl App {
                     }
                 } else {
                     let frac = mv.done as f32 / mv.total.max(1) as f32;
-                    ui.add(egui::ProgressBar::new(frac).text(format!(
-                        "moving {} · {} / {}",
-                        mv.file,
-                        sys::human(mv.done),
-                        sys::human(mv.total)
-                    )));
+                    let text = format!("moving {} · {} / {}", mv.file, sys::human(mv.done), sys::human(mv.total));
+                    ui::progress(ui, Some(frac), ui.available_width(), &text, ui::ACCENT);
                     ui.ctx().request_repaint_after(Duration::from_millis(250));
                 }
             });
@@ -254,8 +250,8 @@ fn row_status(ui: &mut egui::Ui, models: &Models, id: &str, note: &str) {
                 Some(t) => format!("{verb} {} / {}", sys::human(done), sys::human(t)),
                 None => format!("{verb} {}", sys::human(done)),
             };
-            let frac = total.map_or(0.0, |t| done as f32 / t.max(1) as f32);
-            ui.add(egui::ProgressBar::new(frac).desired_width(320.0).text(text));
+            let frac = total.map(|t| done as f32 / t.max(1) as f32);
+            ui::progress(ui, frac, 320.0, &text, ui::ACCENT);
             if ui::tool(ui, icons::CLOSE, "cancel (resumes later)").clicked() {
                 models.cancel(id);
             }

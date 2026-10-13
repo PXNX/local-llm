@@ -7,7 +7,8 @@ use super::widgets as w;
 use super::{FLUX1, Flow, IMAGES, Llm, Needs, each, flag, num, opt, out_or, required_file};
 
 const ENGINES: &[(&str, &str)] = &[
-    ("flux1", "FLUX.1 schnell (default, works)"),
+    ("iris3b", "Iris-3B GGUF (default, small, experimental)"),
+    ("flux1", "FLUX.1 schnell (works)"),
     ("sdxl", "SDXL DreamShaper (broken on this ComfyUI)"),
     ("photomaker", "SDXL + PhotoMaker (broken on this ComfyUI)"),
     ("qwen-image21", "Qwen-Image 2.1 edit (large)"),
@@ -44,7 +45,7 @@ impl Default for Stickers {
             text: Text::None,
             lang: "English".into(),
             texts: vec![String::new()],
-            engine: "flux1".into(),
+            engine: "iris3b".into(),
             strength: 0.55,
             stylize: true,
             seed: None,
@@ -60,6 +61,7 @@ impl Stickers {
             "photomaker" => &["dreamshaper-xl", "photomaker-v2"],
             "qwen-image21" => &["qwen-image21-uc", "qwen3vl-8b-te", "qwen-image21-vae"],
             "flux2-klein" => &["flux2-klein-9b", "flux2-klein-te", "flux2-vae"],
+            "iris3b" => &["iris3b-gguf-q4ks"],
             _ => FLUX1,
         }
     }

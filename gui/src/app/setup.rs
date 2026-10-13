@@ -80,8 +80,8 @@ impl App {
                                 ui.label("queued");
                             }
                             Some(Dl::Running { done, total, .. }) => {
-                                let frac = total.map_or(0.0, |t| done as f32 / t.max(1) as f32);
-                                ui.add(egui::ProgressBar::new(frac).desired_width(160.0).show_percentage());
+                                let frac = total.map(|t| done as f32 / t.max(1) as f32);
+                                ui::progress(ui, frac, 160.0, "", ui::ACCENT);
                             }
                             Some(Dl::Failed(e)) => {
                                 ui.colored_label(AMBER, e.clone()).on_hover_text(e);
@@ -148,7 +148,7 @@ impl App {
         }
         if run {
             self.prompt = None;
-            self.enqueue(id);
+            self.enqueue(id, false);
         } else if close {
             self.prompt = None;
         }
@@ -190,14 +190,15 @@ impl App {
                 }
             }
             ui.add_space(8.0);
-            if ui.button("Download it from GitHub into...").clicked()
+            let cloning = self.launched.busy("git-clone", std::time::Duration::ZERO);
+            if ui.add_enabled(!cloning, egui::Button::new("Download it from GitHub into...")).on_disabled_hover_text("cloning - see its window").clicked()
                 && let Some(parent) = rfd::FileDialog::new().set_title("Folder to clone local-llm into").pick_folder()
             {
                 let target = parent.join("local-llm");
                 let mut cmd = Command::new("git");
                 cmd.args(["clone", REPO_URL]).arg(&target);
                 sys::new_console(&mut cmd);
-                match cmd.spawn() {
+                match self.launched.spawn("git-clone", &mut cmd, std::time::Duration::ZERO) {
                     Ok(_) => {
                         self.cfg.repo = Some(target.clone());
                         self.notify(format!("Cloning into {} - then run setup.bat there (Settings)", target.display()), false);

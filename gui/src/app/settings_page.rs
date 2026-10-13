@@ -12,6 +12,7 @@ use crate::icons;
 use crate::paths;
 use crate::servers::Server;
 use crate::sys;
+use crate::taskbar::sound::{self, Cue};
 use crate::ui::{self, AMBER, GREEN, RED};
 
 impl App {
@@ -29,9 +30,26 @@ impl App {
             ui.add_space(8.0);
             ui::card(ui, |ui| self.secret_settings(ui));
             ui.add_space(8.0);
+            ui::card(ui, |ui| self.queue_settings(ui));
+            ui.add_space(8.0);
             ui::card(ui, |ui| self.storage_settings(ui));
             ui.add_space(8.0);
             ui::card(ui, |ui| self.install_settings(ui));
+        });
+    }
+
+    fn queue_settings(&mut self, ui: &mut egui::Ui) {
+        Self::section(ui, icons::PLAYLIST_PLAY, "Queue");
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.cfg.sounds, "Play sounds")
+                .on_hover_text("a ding when a run finishes, a low tone when it fails, a little fanfare when the whole queue is through");
+            if self.cfg.sounds {
+                for (label, cue) in [("Run done", Cue::RunDone), ("Run failed", Cue::RunFailed), ("Queue done", Cue::QueueDone)] {
+                    if ui.small_button(format!("▶ {label}")).on_hover_text("play it").clicked() {
+                        sound::play(cue);
+                    }
+                }
+            }
         });
     }
 
@@ -274,9 +292,7 @@ impl App {
                 let mut cmd = Command::new("cmd");
                 cmd.args(["/K", "git", "pull", "--ff-only"]).current_dir(&root);
                 sys::new_console(&mut cmd);
-                if let Err(e) = cmd.spawn() {
-                    self.notify(format!("could not run git: {e}"), true);
-                }
+                self.launch_once("git-pull", &mut cmd, "git pull");
             }
             self.desktop_shortcut_button(ui, &root);
         });
@@ -313,9 +329,7 @@ impl App {
         let mut cmd = Command::new("cmd");
         cmd.arg("/C").arg(root.join("setup.bat")).current_dir(&root);
         sys::new_console(&mut cmd);
-        if let Err(e) = cmd.spawn() {
-            self.notify(format!("could not run setup.bat: {e}"), true);
-        }
+        self.launch_once("setup", &mut cmd, "setup.bat");
     }
 
     fn desktop_shortcut_button(&mut self, ui: &mut egui::Ui, root: &std::path::Path) {

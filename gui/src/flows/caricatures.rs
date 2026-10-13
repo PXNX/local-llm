@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use super::widgets as w;
 use super::{FLUX1, Flow, IMAGES, Llm, Needs, each, filled, flag, opt, out_or};
 
+const ENGINES: &[(&str, &str)] = &[("flux1", "FLUX.1 schnell (default, works)"), ("iris3b", "Iris-3B GGUF (small, experimental)")];
+
 // the built-in lists of caricatures/make_caricatures.py
 const EXPRESSIONS: &[&str] = &[
     "neutral expression, standing",
@@ -31,6 +33,7 @@ pub struct Caricatures {
     custom: Vec<String>,
     cutout: bool,
     vectorize: bool,
+    engine: String,
     seed: Option<i64>,
     out: String,
 }
@@ -62,6 +65,7 @@ impl Caricatures {
             custom: Vec::new(),
             cutout: false,
             vectorize: false,
+            engine: "flux1".into(),
             seed: None,
             out: String::new(),
         }
@@ -148,6 +152,9 @@ impl Flow for Caricatures {
             w::label(ui, "Seed", "");
             w::seed(ui, &mut self.seed);
             ui.end_row();
+            w::label(ui, "Engine", "");
+            w::choice(ui, "engine", &mut self.engine, ENGINES);
+            ui.end_row();
             w::label(ui, "Output folder", "");
             w::folder(ui, &mut self.out, "default: caricatures/out");
             ui.end_row();
@@ -186,6 +193,9 @@ impl Flow for Caricatures {
         }
         flag(&mut a, "--cutout", self.cutout || self.vectorize);
         flag(&mut a, "--vectorize", self.vectorize);
+        if self.engine == "iris3b" {
+            opt(&mut a, "--engine", "iris3b");
+        }
         if let Some(s) = self.seed {
             a.extend(["--seed".into(), s.to_string()]);
         }
@@ -198,7 +208,11 @@ impl Flow for Caricatures {
         if !self.things && !self.photo.trim().is_empty() {
             n.llm(llm);
         }
-        n.comfy(FLUX1);
+        if self.engine == "iris3b" {
+            n.comfy(&["iris3b-gguf-q4ks"]);
+        } else {
+            n.comfy(FLUX1);
+        }
         n
     }
 

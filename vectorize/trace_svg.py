@@ -4,6 +4,7 @@ outlines, similar to vectorizer.ai / Vector Magic. Runs fully locally via vtrace
 
 Usage (via 4-vectorize.bat, which uses ComfyUI's embedded Python):
   4-vectorize.bat photo.jpg [--style photo|logo|sketch] [--mode color|bw] [--out out.svg]
+  4-vectorize.bat photo.jpg --out-dir folder      (writes folder/photo.svg)
 """
 import argparse
 import sys
@@ -26,12 +27,19 @@ def main():
                      help="photo = smooth curves for photos (default), logo = crisp flat-color shapes, sketch = fine detail/lines")
     ap.add_argument("--mode", choices=["color", "bw"], default="color",
                      help="color = full color (default), bw = black & white silhouette")
-    ap.add_argument("--out", type=Path, default=None, help="output .svg (default: alongside the input)")
+    ap.add_argument("--out", type=Path, default=None, help="output .svg file (default: alongside the input)")
+    ap.add_argument("--out-dir", type=Path, default=None, help="output folder, file = <input name>.svg (created if missing)")
     args = ap.parse_args()
 
     if not args.image.exists():
         sys.exit(f"Not found: {args.image}")
-    out = args.out or args.image.with_suffix(".svg")
+    if args.out:
+        out = args.out
+    elif args.out_dir:
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+        out = args.out_dir / args.image.with_suffix(".svg").name
+    else:
+        out = args.image.with_suffix(".svg")
 
     print(f"[trace] {args.image.name} -> {out.name}  (style={args.style}, mode={args.mode})")
     vtracer.convert_image_to_svg_py(

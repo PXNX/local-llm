@@ -4,7 +4,7 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use super::widgets as w;
-use super::{Flow, Llm, Needs, each, filled, flag, num, opt};
+use super::{Flow, Llm, Needs, each, filled, flag, num, opt, out_or};
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
@@ -38,6 +38,7 @@ pub struct Top5 {
     cached_only: bool,
     login: String,
     console: bool,
+    out: String,
 }
 
 impl Default for Top5 {
@@ -72,6 +73,7 @@ impl Default for Top5 {
             cached_only: false,
             login: "qr".into(),
             console: false,
+            out: String::new(),
         }
     }
 }
@@ -173,6 +175,9 @@ impl Flow for Top5 {
                 ui.checkbox(&mut self.nvenc, "encode on the GPU (NVENC, driver >= 570)");
             });
             ui.end_row();
+            w::label(ui, "Output folder", "");
+            w::folder(ui, &mut self.out, "default: topvideos/out");
+            ui.end_row();
             w::label(ui, "Telegram login", "only needed once, the session is saved");
             ui.vertical(|ui| {
                 if logged_in(root) {
@@ -252,6 +257,7 @@ impl Flow for Top5 {
         flag(&mut a, "--keep-work", self.keep_work);
         flag(&mut a, "--cached-only", self.cached_only);
         opt(&mut a, "--login", &self.login);
+        opt(&mut a, "--out", &self.out);
         Ok(a)
     }
 
@@ -262,7 +268,7 @@ impl Flow for Top5 {
     }
 
     fn out_dir(&self, root: &Path) -> PathBuf {
-        root.join("topvideos").join("out")
+        out_or(&self.out, root.join("topvideos").join("out"))
     }
 
     fn console(&self, root: &Path) -> bool {
