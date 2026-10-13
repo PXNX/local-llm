@@ -1,22 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- local-llm: a chip (runs on your own hardware) with a creative spark inside -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4F8DFF"/>
-      <stop offset="0.55" stop-color="#6A4DF5"/>
-      <stop offset="1" stop-color="#9B2FE0"/>
+      <stop offset="0" stop-color="#3B2FC9"/>
+      <stop offset="0.6" stop-color="#6D28D9"/>
+      <stop offset="1" stop-color="#A21CAF"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.42" cy="0.58" r="0.5">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.30"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </radialGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFD24A"/>
+      <stop offset="1" stop-color="#FF5E8A"/>
+    </linearGradient>
   </defs>
   <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
-  <rect x="9.5" y="9.5" width="237" height="237" rx="54.5" fill="none" stroke="#1B1060" stroke-opacity="0.35" stroke-width="3"/>
+  <rect x="9.5" y="9.5" width="237" height="237" rx="54.5" fill="none" stroke="#140A4A" stroke-opacity="0.35" stroke-width="3"/>
   <g id="detail">
-    <circle cx="108" cy="148" r="92" fill="url(#glow)"/>
-    <path d="M108 60 Q121 135 196 148 Q121 161 108 236 Q95 161 20 148 Q95 135 108 60 Z" fill="#2A1470" fill-opacity="0.30" transform="translate(5 6)"/>
-    <circle cx="200" cy="196" r="11" fill="#FFFFFF" fill-opacity="0.85"/>
+    <circle cx="128" cy="128" r="110" fill="url(#glow)"/>
+    <!-- chip pins -->
+    <path d="M98 50 V68 M128 50 V68 M158 50 V68 M98 188 V206 M128 188 V206 M158 188 V206 M50 98 H68 M50 128 H68 M50 158 H68 M188 98 H206 M188 128 H206 M188 158 H206" stroke="#DDD6FE" stroke-width="11" stroke-linecap="round"/>
+    <rect x="72" y="76" width="112" height="112" rx="24" fill="#140A4A" fill-opacity="0.30"/>
   </g>
-  <path d="M108 60 Q121 135 196 148 Q121 161 108 236 Q95 161 20 148 Q95 135 108 60 Z" fill="#FFFFFF"/>
-  <path d="M186 28 Q192 62 226 68 Q192 74 186 108 Q180 74 146 68 Q180 62 186 28 Z" fill="#FFC83D"/>
+  <rect x="68" y="68" width="120" height="120" rx="26" fill="#FFFFFF"/>
+  <path d="M128 82 Q134 122 174 128 Q134 134 128 174 Q122 134 82 128 Q122 122 128 82 Z" fill="url(#spark)"/>
+  <circle cx="163" cy="93" r="8" fill="#A78BFA"/>
 </svg>

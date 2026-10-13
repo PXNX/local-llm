@@ -1,6 +1,6 @@
 [package]
 name = "local-llm-gui"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "One window for all local-llm flows: inputs, env vars, models and servers"
 license = "MIT"
