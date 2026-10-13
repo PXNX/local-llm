@@ -7,11 +7,11 @@ Requires Windows 10/11, [Git for Windows](https://git-scm.com/download/win) and 
 ```bat
 git clone https://github.com/PXNX/local-llm.git
 cd local-llm
-setup.bat          & rem Ollama, OpenCode, ComfyUI portable + GGUF node + rembg, OpenCode config
+setup.bat          & rem Ollama, OpenCode, Pi, ComfyUI portable + GGUF node + rembg, OpenCode + Pi config
 0-download-all.bat & rem all models (~100 GB, resumable)
 ```
 Not in git (installed by the scripts): `ComfyUI_windows_portable/` and all models.
-The OpenCode config template is `config/opencode.json`.
+The OpenCode config template is `config/opencode.json`, the Pi ones `config/pi-models.json` + `config/pi-settings.json`.
 
 All models live in **one folder**: `MODELS_DIR` in `.env` (empty = `models\` in this folder; GUI: Settings > Model
 storage). ComfyUI's folders (`checkpoints\`, `diffusion_models\`, `text_encoders\`, `vae\` ...) sit directly in it,
@@ -350,6 +350,16 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
 - **T3 Code**: OpenCode provider enabled with binaryPath (`providerInstances.opencode`) in
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code, pick the model under the
   OpenCode provider: `opencode/muse-spark-1.3-contributor-free` (default) or `ollama/qwen3:8b` (or another one).
+- **Pi** ([pi coding agent](https://github.com/earendil-works/pi), bun global install, package
+  `@earendil-works/pi-coding-agent`): terminal agent, defaults to the local JetBrains blend
+  (`ollama/qwen3.8-blend:27b`, thinking `low`). Config: `%USERPROFILE%\.pi\agent\models.json` (provider `ollama`,
+  OpenAI-compatible `/v1`, 32K context like `OLLAMA_CONTEXT_LENGTH`) and `settings.json`; templates in `config\pi-*.json`.
+  `3-coding-llm-t3code.bat qwen3.8-blend:27b pi` starts Ollama, preloads the model and opens Pi; or just `pi` in any
+  project folder (`/model` switches, e.g. to `ollama/qwen3:8b`). T3 Code has no Pi provider, so Pi stays in the terminal.
+  The 27B blend is slow here: a small file edit took ~3-6 min including model load.
+- **Ollama >= 0.40 model location**: the tray app passes its own *Settings > Model location* to the server and ignores
+  `OLLAMA_MODELS`. If `ollama list` is empty after an update, set it there to `<MODELS_DIR>\ollama` (e.g.
+  `C:\dev\local-llm\models\ollama`) and restart Ollama.
 
 Note: ComfyUI and Ollama share the 6 GB of VRAM. Don't run both at the same time
 (Ollama unloads models after 5 min idle; `ollama stop <model>` does it immediately).
