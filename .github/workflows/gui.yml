@@ -1,11 +1,12 @@
 name: GUI
 
-# Builds gui/ (local-llm.exe) on every push/PR that touches it; a tag like v1.2.0 also publishes a release.
-# Nothing private is used or embedded: keys live in the user's local .env, read at runtime.
+# Builds gui/ (local-llm.exe) on every push/PR that touches it; a semver tag (v1.2.0, v1.3.0-rc.1) also publishes
+# a GitHub release (pre-release for a -suffix). Releases come only from here: release.bat bumps gui/Cargo.toml,
+# builds locally, tags and pushes. Nothing private is used or embedded: keys live in the user's local .env.
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-*"]
     paths: ["gui/**", "models.json", ".github/workflows/gui.yml"]
   pull_request:
     paths: ["gui/**", "models.json", ".github/workflows/gui.yml"]
@@ -22,6 +23,15 @@ jobs:
         working-directory: gui
     steps:
       - uses: actions/checkout@v5
+
+      - name: Semver tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          [[ ${GITHUB_REF_NAME#v} =~ $semver ]] || { echo "::error::$GITHUB_REF_NAME is no semver tag (vX.Y.Z[-pre])"; exit 1; }
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME but gui/Cargo.toml says $version - use release.bat"; exit 1; }
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -58,3 +68,4 @@ jobs:
         with:
           files: gui/dist/local-llm-windows-x64.zip
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
