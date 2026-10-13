@@ -4,6 +4,7 @@ rem   Default: free OpenCode Zen cloud model opencode/muse-spark-1.3-contributor
 rem   Other Zen model:    3-coding-llm-t3code.bat opencode/mimo-v2.6-flash-free
 rem   Local Ollama model: 3-coding-llm-t3code.bat qwen3:8b     (or gpt-oss:20b, qwen3-coder:30b, qwen3.8-blend:27b)
 rem   Terminal instead of T3 Code:  3-coding-llm-t3code.bat qwen3:8b cli
+rem   Pi coding agent (terminal):   3-coding-llm-t3code.bat qwen3.8-blend:27b pi   (local models in config\pi-models.json)
 setlocal
 call "%~dp0common\models-env.bat"
 set "MODEL=%~1"
@@ -38,6 +39,10 @@ powershell -NoProfile -Command "Invoke-RestMethod http://127.0.0.1:11434/api/gen
 "%OLLAMA%\ollama.exe" ps
 
 :open
+if /i "%~2"=="pi" (
+  "%USERPROFILE%\.bun\bin\pi.exe" --model %FULL%
+  exit /b 0
+)
 if /i "%~2"=="cli" (
   "%USERPROFILE%\.bun\bin\opencode.exe" -m %FULL%
   exit /b 0

@@ -17,6 +17,9 @@ winget list --id DenoLand.Deno -e >nul 2>&1 || winget install --id DenoLand.Deno
 echo === OpenCode (bun global install, self-updating)
 "%USERPROFILE%\.bun\bin\bun.exe" install -g opencode-ai
 
+echo === Pi coding agent (bun global install, terminal agent for local Ollama models)
+"%USERPROFILE%\.bun\bin\bun.exe" install -g @earendil-works/pi-coding-agent
+
 echo === OpenCode 2 for opencode-wrap (LLM_PROVIDER=opencode, built from source with bun, a few minutes once)
 call "%~dp0opencode-wrap\install-opencode2.bat"
 
@@ -35,6 +38,17 @@ if not exist "%USERPROFILE%\.config\opencode\opencode.json" (
   echo Installed %USERPROFILE%\.config\opencode\opencode.json
 ) else (
   echo Exists already, not overwritten. Template: config\opencode.json
+)
+
+echo === Pi config (Ollama provider, default JetBrains Qwen3.8/3.6 27B blend)
+mkdir "%USERPROFILE%\.pi\agent" 2>nul
+for %%F in (models settings) do (
+  if not exist "%USERPROFILE%\.pi\agent\%%F.json" (
+    copy "%~dp0config\pi-%%F.json" "%USERPROFILE%\.pi\agent\%%F.json" >nul
+    echo Installed %USERPROFILE%\.pi\agent\%%F.json
+  ) else (
+    echo Exists already, not overwritten. Template: config\pi-%%F.json
+  )
 )
 
 echo === ComfyUI portable %COMFY_VER% (~2 GB)

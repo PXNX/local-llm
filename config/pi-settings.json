@@ -1,0 +1,5 @@
+{
+  "defaultProvider": "ollama",
+  "defaultModel": "qwen3.8-blend:27b",
+  "defaultThinkingLevel": "low"
+}
