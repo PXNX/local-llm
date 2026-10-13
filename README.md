@@ -22,12 +22,14 @@ variables to Ollama, ComfyUI and the flows; `start-comfyui.bat` starts ComfyUI w
 finds files left in `ComfyUI\models` (`config/comfyui-old-models.yaml`). `setup.bat` and the GUI also save
 `OLLAMA_MODELS` as a user variable, so restart the Ollama tray app once so it uses the folder too. Models from older
 setups (ComfyUI's own folder, `%USERPROFILE%\.ollama\models`, the Hugging Face / torch hub caches, `~\.u2net`,
-`comedy\models`) are offered to be moved on the GUI's Models page; `download-models.sh` moves ComfyUI files over by itself.
+`comedy\models`, `kokoro\` in the repo root) are offered to be moved on the GUI's Models page (the Start page flags
+them too); `download-models.sh` moves ComfyUI files over by itself.
 
 ## GUI - one window for all flows (`gui/`)
 `local-llm.exe` runs every flow below with a form instead of command-line options. Download it from the
 [GitHub releases](https://github.com/PXNX/local-llm/releases) (built by `.github/workflows/gui.yml` on every
-`v*` tag) or build it: `cd gui && cargo build --release` -> `gui\target\release\local-llm.exe`. Put it anywhere; it
+semver tag `vX.Y.Z` - `release.bat [patch|minor|major|X.Y.Z[-pre]]` bumps `gui/Cargo.toml`, builds the exe locally
+with the release profile, then tags and pushes) or build it: `cd gui && cargo build --release` -> `gui\target\release\local-llm.exe`. Put it anywhere; it
 finds this folder next to itself or asks for it (and can clone it on a fresh PC).
 - **Start page**: setup checklist (ComfyUI/Python, NVIDIA driver >= 580, vision AI key, models, Telegram) with one-click fixes, a short line about what is running and CPU/RAM/GPU/VRAM usage.
 - **Queue**: one flow runs at a time (the GPU gets everything). "Add to queue" works on any flow at any time - also the running one, e.g. a second sticker batch with other input; each waiting run keeps the settings it was added with. The Queue page shows the running run (progress, ETA, cancel), the waiting runs (reorder, remove, clear) and the runs finished this session with their result; the top bar has one compact progress indicator that links there.
