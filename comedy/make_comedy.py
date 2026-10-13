@@ -71,6 +71,9 @@ def main():
                     "characters without caricatures - those are the channel's own designs, not for publishing")
     ap.add_argument("--voice-engine", choices=["auto", "kokoro", "sapi"], default="auto")
     ap.add_argument("--music", choices=["calm", "funny", "none"], default="calm", help="quiet music bed (default calm)")
+    ap.add_argument("--limbs", action="store_true", help="animate the head separately from the body (it nods/bobs "
+                    "while talking, instead of the whole cutout squashing as one piece) - split automatically at "
+                    "the neck, no extra drawings needed")
     ap.add_argument("--no-subtitles", action="store_true")
     ap.add_argument("--no-end-card", action="store_true")
     ap.add_argument("--handle", default="", help="channel name shown top right, e.g. @mychannel")
@@ -156,6 +159,7 @@ def main():
         script, {k: {s: (str(p) if p else None) for s, p in v.items()} for k, v in sprites.items()},
         voices.say, W, H, fps, end_card=not args.no_end_card, subtitles=not args.no_subtitles,
         handle=args.handle, seed=script["seed"], bg_paths={k: (str(v) if v else None) for k, v in bg_paths.items()})
+    plan["rig"] = args.limbs
     print(f"[plan   ] {plan['total']:.1f} s, {len(plan['scenes'])} scenes, {W}x{H} @ {fps} fps")
 
     # ---- 5. sound
