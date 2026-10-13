@@ -23,5 +23,6 @@
   (`ComfyUI_windows_portable/python_embeded/python.exe`); there is no system Python.
 - Releases (semver): `release.bat [patch|minor|major|X.Y.Z[-pre]]` bumps `gui/Cargo.toml`, builds the exe
   locally with the release profile (clippy, tests, build), then tags `vX.Y.Z` and pushes. Only
-  `.github/workflows/gui.yml` publishes the GitHub release - never upload one by hand.
+  `.github/workflows/gui.yml` publishes the GitHub release: every push to main whose `gui/Cargo.toml` version
+  has no release yet gets one (tagged there if needed) - never upload one by hand.
 - Line endings follow `.gitattributes` (`.bat` CRLF, everything else LF).

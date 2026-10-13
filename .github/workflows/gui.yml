@@ -1,12 +1,13 @@
 name: GUI
 
-# Builds gui/ (local-llm.exe) on every push/PR that touches it; a semver tag (v1.2.0, v1.3.0-rc.1) also publishes
-# a GitHub release (pre-release for a -suffix). Releases come only from here: release.bat bumps gui/Cargo.toml,
+# Builds gui/ (local-llm.exe) on every push/PR that touches it. A push to main whose gui/Cargo.toml version
+# (semver: 1.2.0, 1.3.0-rc.1) has no GitHub release yet publishes one as vX.Y.Z (pre-release for a -suffix),
+# tagging the commit if release.bat didn't already. Releases come only from here - release.bat just bumps,
 # builds locally, tags and pushes. Nothing private is used or embedded: keys live in the user's local .env.
+# (No tag trigger: GitHub applies the paths filter to tag pushes too, so tags alone never built a release.)
 on:
   push:
     branches: [main]
-    tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-*"]
     paths: ["gui/**", "models.json", ".github/workflows/gui.yml"]
   pull_request:
     paths: ["gui/**", "models.json", ".github/workflows/gui.yml"]
@@ -24,14 +25,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Semver tag matches the crate version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Version (release when it has none yet)
+        id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
-          [[ ${GITHUB_REF_NAME#v} =~ $semver ]] || { echo "::error::$GITHUB_REF_NAME is no semver tag (vX.Y.Z[-pre])"; exit 1; }
-          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME but gui/Cargo.toml says $version - use release.bat"; exit 1; }
+          [[ $version =~ $semver ]] || { echo "::error::gui/Cargo.toml version $version is no semver (X.Y.Z[-pre])"; exit 1; }
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] && [ "$GITHUB_REF" = refs/heads/main ] \
+             && ! gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "v$version has no release yet - publishing it after the build"
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -63,9 +71,11 @@ jobs:
           path: gui/dist/local-llm.exe
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.version.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: gui/dist/local-llm-windows-x64.zip
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
