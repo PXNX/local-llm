@@ -11,7 +11,10 @@ Configured in the repo's .env (real environment variables win):
   OPENCODE_WRAP_URL   opencode-wrap (opencode-wrap/server.ts, started with bun when down), default http://127.0.0.1:8000/v1
   LLM_LOCAL_FALLBACK  also applies to opencode: local Ollama model when the Zen model fails
   OLLAMA_MODEL        local vision model, default qwen3-vl:4b
-  OLLAMA_TEXT_MODEL   local model for text-only prompts (text_json), default qwen3:8b - qwen3-vl:4b
+  LLM_LOCAL_PROFILE   speed (default) or quality - the GUI's toggle: which local model answers text-only
+                      prompts when OLLAMA_TEXT_MODEL isn't set (LLM_CODING_SPEED_MODEL, default qwen3:8b, or
+                      LLM_CODING_QUALITY_MODEL, default qwen3.8-blend:27b - much better, ~5x slower here)
+  OLLAMA_TEXT_MODEL   local model for text-only prompts (text_json), overrides the profile - qwen3-vl:4b
                       struggles with long structured prompts (e.g. the comedy sketch writer): it can
                       burn its entire num_predict budget "thinking" and return empty content, never
                       reaching the answer, however high num_predict is set
@@ -36,6 +39,7 @@ DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b"
 DEFAULT_OPENCODE_MODEL = "opencode/muse-spark-1.3-contributor-free"
 DEFAULT_WRAP_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_OLLAMA_TEXT_MODEL = "qwen3:8b"
+DEFAULT_QUALITY_TEXT_MODEL = "qwen3.8-blend:27b"
 DEFAULT_FALLBACKS = "google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 MAX_FALLBACKS = 3
 
@@ -133,8 +137,17 @@ def label():
     return f"{model()} via {provider()}"
 
 
+def ollama_text_model():
+    """OLLAMA_TEXT_MODEL, else the model of the speed/quality profile."""
+    if _ENV.get("OLLAMA_TEXT_MODEL"):
+        return _ENV["OLLAMA_TEXT_MODEL"]
+    if _ENV.get("LLM_LOCAL_PROFILE", "").strip().lower() == "quality":
+        return _ENV.get("LLM_CODING_QUALITY_MODEL") or DEFAULT_QUALITY_TEXT_MODEL
+    return _ENV.get("LLM_CODING_SPEED_MODEL") or DEFAULT_OLLAMA_TEXT_MODEL
+
+
 def text_label():
-    local = _ENV.get("OLLAMA_TEXT_MODEL") or DEFAULT_OLLAMA_TEXT_MODEL
+    local = ollama_text_model()
     return f"{local} via ollama" if is_local() else label()
 
 
@@ -199,7 +212,7 @@ def _ask(prompt, b64, temperature, keep_alive, ollama_options):
             return _opencode(prompt, b64, temperature)
         except Exception as e:
             if local_fallback() and _ollama_up():
-                print(f"[llm  ] {model()} failed ({str(e)[:120]}), using the local model {ollama_model()}")
+                print(f"[llm  ] WARNING: {model()} failed ({_short(e)}), using the local model {ollama_model()}")
                 return _ollama(prompt, b64, temperature, keep_alive, ollama_options)
             raise RuntimeError(f"OpenCode Zen ({model()}): {e}") from None
     if provider() == "openrouter":
@@ -210,7 +223,7 @@ def _ask(prompt, b64, temperature, keep_alive, ollama_options):
                     return _openrouter(name, prompt, b64, temperature)
                 except Exception as e:  # rate limit, model gone, bad JSON ... -> next model
                     errors.append(f"{name}: {e}")
-                    print(f"[llm  ] {name} failed ({str(e)[:120]}), trying the next model ...")
+                    print(f"[llm  ] WARNING: {name} failed ({_short(e)}), trying the next model ...")
         if local_fallback() and _ollama_up():
             print(f"[llm  ] OpenRouter failed, using the local model {ollama_model()}")
             return _ollama(prompt, b64, temperature, keep_alive, ollama_options)
@@ -230,7 +243,7 @@ def _ollama(prompt, b64, temperature, keep_alive, ollama_options):
     if b64:
         msg["images"] = [b64]
     payload = {
-        "model": ollama_model() if b64 else (_ENV.get("OLLAMA_TEXT_MODEL") or DEFAULT_OLLAMA_TEXT_MODEL),
+        "model": ollama_model() if b64 else ollama_text_model(),
         "messages": [msg],
         "format": "json",
         "stream": False,
@@ -262,7 +275,7 @@ def _openrouter(name, prompt, b64, temperature):
         try:
             res = _post(OPENROUTER_URL, payload, headers, timeout=300)
         except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")[:300]
+            body = _http_error(e)
             if e.code == 400 and "response_format" in payload:
                 payload.pop("response_format")  # model without JSON mode, the prompt asks for JSON anyway
                 continue
@@ -273,9 +286,49 @@ def _openrouter(name, prompt, b64, temperature):
                 continue
             raise RuntimeError(f"OpenRouter {e.code}: {body}") from None
         if "error" in res:
-            raise RuntimeError(f"OpenRouter: {res['error']}")
+            raise RuntimeError(f"OpenRouter: {_error_text(res['error'])}")
         return _parse_json(res["choices"][0]["message"].get("content"))
     raise RuntimeError("OpenRouter: no answer after retries")
+
+
+def _error_text(err):
+    """The readable part of an OpenAI-style error object: the provider's own message (OpenRouter puts
+    it, often as JSON text, into metadata.raw) rather than a generic "Provider returned error"."""
+    if not isinstance(err, dict):
+        return str(err)
+    msg = str(err.get("message") or "").strip()
+    meta = err.get("metadata") or {}
+    raw = meta.get("raw")
+    if isinstance(raw, str):
+        try:
+            inner = json.loads(raw)
+            if isinstance(inner, dict):
+                inner = inner.get("error", inner)
+                raw = inner.get("message") or inner.get("msg") or raw if isinstance(inner, dict) else raw
+        except ValueError:
+            pass
+        raw = " ".join(str(raw).split())
+        if raw and raw not in msg:
+            msg = raw if msg in ("", "Provider returned error") else f"{msg}: {raw}"
+    provider = meta.get("provider_name")
+    return f"{provider}: {msg}" if provider and msg else msg or str(err)
+
+
+def _http_error(e):
+    """An HTTPError's body as a readable message (JSON error bodies are unpacked)."""
+    body = e.read().decode(errors="replace")
+    try:
+        data = json.loads(body)
+        if isinstance(data, dict) and "error" in data:
+            return _error_text(data["error"])
+    except ValueError:
+        pass
+    return " ".join(body.split())[:300]
+
+
+def _short(e, limit=220):
+    text = str(e)
+    return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
 def _opencode(prompt, b64, temperature):
@@ -292,5 +345,5 @@ def _opencode(prompt, b64, temperature):
     try:
         res = _post(f"{wrap_url()}/chat/completions", payload, timeout=600)
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"opencode-wrap {e.code}: {e.read().decode(errors='replace')[:300]}") from None
+        raise RuntimeError(f"opencode-wrap {e.code}: {_http_error(e)}") from None
     return _parse_json(res["choices"][0]["message"].get("content"))

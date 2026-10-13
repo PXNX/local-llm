@@ -868,7 +868,7 @@ async def run(args):
     since = now - dt.timedelta(hours=args.hours) if args.hours else now.replace(hour=0, minute=0, second=0, microsecond=0)
     W, H = (720, 1280) if args.format == "vertical" else (1280, 720)
     DL_DIR.mkdir(parents=True, exist_ok=True)
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    args.out.mkdir(parents=True, exist_ok=True)
     cache = load_cache()
 
     import sqlite3
@@ -969,7 +969,7 @@ def render_video(top, topic, args, now, W, H, suffix=""):
         print(f"   #{rank}  {c['final']:5.2f}  {c['ai']['title'] or c['ai']['subject']}  ({c['channel']}) {c['link']}")
 
     stamp = f"{now:%Y-%m-%d}"
-    work = OUT_DIR / f"_work_{topic}_{stamp}{suffix}"
+    work = args.out / f"_work_{topic}_{stamp}{suffix}"
     work.mkdir(exist_ok=True)
     headline = args.headline or f"Top {n} {word} Videos of Today"
     order = sorted(top, key=lambda c: -c["rank"])  # countdown: #5 first
@@ -1018,7 +1018,7 @@ def render_video(top, topic, args, now, W, H, suffix=""):
                     W, H, work / f"{10 - r:02d}b_clip.mp4", args, extra=sub.get(r))
         parts += [work / f"{10 - r:02d}a_card.mp4", work / f"{10 - r:02d}b_clip.mp4"]
 
-    out = OUT_DIR / f"top{n}_{topic}_{stamp}{suffix}.mp4"
+    out = args.out / f"top{n}_{topic}_{stamp}{suffix}.mp4"
     thumb = out.with_name(out.stem + "_thumbnail.jpg")
     thumbnail(thumb, W, H, top, word, topic)
     joined = work / "joined.mp4"
@@ -1069,6 +1069,7 @@ def main():
                     help="vertical 720x1280 (Shorts/Reels/TikTok, default) or landscape 1280x720")
     ap.add_argument("--lang", default="English", help="language of the titles (default English)")
     ap.add_argument("--headline", help='own intro text, default "Top 5 Funniest/Cutest Videos of Today"')
+    ap.add_argument("--out", type=Path, default=OUT_DIR, help="output folder for the finished videos (default topvideos/out)")
     ap.add_argument("--title-bar", action="store_true", help="also show the title as a bar on the clips")
     ap.add_argument("--audio", choices=["music", "original", "none"], default="music",
                     help="music = own generated soundtrack, copyright-free (default); original = the clips' "

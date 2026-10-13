@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,8 @@ pub enum Page {
     Flow(FlowId),
     /// running, waiting and recently finished runs
     Queue,
+    /// local coding models: speed/quality toggle, setup, open the editors
+    Coding,
     Models,
     Settings,
     /// also where an unknown saved page (older versions) lands
@@ -35,6 +37,10 @@ pub struct Config {
     /// Average seconds spent in each `[tag]` step of a flow's last few runs, used to estimate ETA
     /// even before the script reports its own progress fraction.
     pub step_times: HashMap<FlowId, HashMap<String, f32>>,
+    /// A sound when a queued run ends and another when the queue is through.
+    pub sounds: bool,
+    /// Named form settings per flow, saved and loaded on the flow's page.
+    pub presets: HashMap<FlowId, BTreeMap<String, serde_json::Value>>,
 }
 
 impl Default for Config {
@@ -48,6 +54,8 @@ impl Default for Config {
             page: Page::Home,
             forms: Forms::default(),
             step_times: HashMap::new(),
+            sounds: true,
+            presets: HashMap::new(),
         }
     }
 }

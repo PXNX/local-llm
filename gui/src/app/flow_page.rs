@@ -8,6 +8,7 @@ use super::{App, mmss};
 use crate::config::Page;
 use crate::flows::FlowId;
 use crate::icons;
+use crate::highlight;
 use crate::jobs::{self, JobHandle, Launch, Level, Line, State};
 use crate::sys;
 use crate::ui::{self, AMBER, GREEN, RED};
@@ -30,6 +31,8 @@ impl App {
             }
         });
         ui.label(RichText::new(blurb).weak());
+        ui.add_space(4.0);
+        self.presets_row(ui, id);
         ui.add_space(6.0);
 
         let (env, models) = self.missing(&self.needs(id));
@@ -81,16 +84,22 @@ impl App {
     fn run_bar(&mut self, ui: &mut egui::Ui, id: FlowId, job: Option<&JobHandle>) {
         let args = self.cfg.forms.get(id).args();
         let queued = self.queue.iter().filter(|(q, _)| *q == id).count();
-        let busy = self.running.is_some() || !self.queue.is_empty();
         let mut open_queue = false;
         ui.horizontal(|ui| {
-            let (icon, label, tip) = if busy {
-                (icons::PLAYLIST_PLUS, "Add to queue", "only one flow runs at a time - this run waits with the settings as they are now")
+            if self.running.is_some() {
+                let tip = "only one flow runs at a time - this run waits with the settings as they are now";
+                if ui::primary(ui, args.is_ok(), icons::PLAYLIST_PLUS, "Add to queue").on_hover_text(tip).clicked() {
+                    self.run(id, true);
+                }
             } else {
-                (icons::PLAY, "Run", "starts right away; press again to line up more runs")
-            };
-            if ui::primary(ui, args.is_ok(), icon, label).on_hover_text(tip).clicked() {
-                self.run(id);
+                let tip = "starts right away; press again to line up more runs";
+                if ui::primary(ui, args.is_ok(), icons::PLAY, "Run").on_hover_text(tip).clicked() {
+                    self.run(id, false);
+                }
+                let tip = "line it up without starting - collect several runs, then press Start on the Queue page";
+                if ui::button_enabled(ui, args.is_ok(), icons::PLAYLIST_PLUS, "Add to queue").on_hover_text(tip).clicked() {
+                    self.run(id, true);
+                }
             }
             if let Err(e) = &args {
                 ui::status(ui, icons::INFORMATION_OUTLINE, AMBER, e.as_str());
@@ -126,16 +135,17 @@ impl App {
     }
 
     /// Queues the flow, or opens the setup dialog when env vars or models are missing.
-    pub(super) fn run(&mut self, id: FlowId) {
+    pub(super) fn run(&mut self, id: FlowId, hold: bool) {
         if !self.ready(id) {
             self.prompt = Some(id);
             return;
         }
-        self.enqueue(id);
+        self.enqueue(id, hold);
     }
 
-    /// Snapshots the form into a launch and puts it into the queue (starts at once when idle).
-    pub(super) fn enqueue(&mut self, id: FlowId) {
+    /// Snapshots the form into a launch. When idle it starts at once (`hold`: waits in the queue,
+    /// which goes on hold until Start); while a run is going it joins the end of the queue.
+    pub(super) fn enqueue(&mut self, id: FlowId, hold: bool) {
         let Some(r) = &self.repo else { return };
         let flow = self.cfg.forms.get(id);
         let args = match flow.args() {
@@ -143,23 +153,123 @@ impl App {
             Err(e) => return self.notify(e, true),
         };
         let root = r.paths.root.clone();
+        let needs = self.needs(id);
+        let meta = self.run_meta(id, &needs.models);
         let launch = Launch {
             title: flow.title().to_owned(),
             python: r.paths.python(),
             script: r.paths.script(flow.script()),
             args,
-            servers: self.needs(id).servers,
+            servers: needs.servers,
             console: flow.console(&root),
             out_dir: flow.out_dir(&root),
+            meta,
             root,
         };
-        let waiting = self.running.is_some() || !self.queue.is_empty();
-        self.queue.push_back((id, launch));
-        if waiting {
-            self.notify(format!("Added to the queue (position {})", self.queue.len()), false);
+        if self.running.is_none() && !hold {
+            // Run while idle: starts now, even ahead of a queue on hold
+            self.start(id, launch);
+        } else {
+            self.held |= self.running.is_none();
+            self.queue.push_back((id, launch));
+            let when = if self.held { "press Start on the Queue page to run it" } else { "starts when its turn comes" };
+            self.notify(format!("Added to the queue (position {}) - {when}", self.queue.len()), false);
         }
-        self.pump_queue();
         self.save_config();
+    }
+
+    /// metadata.json content known before the run: flow, form settings, models and LLM setup.
+    fn run_meta(&self, id: FlowId, model_ids: &[String]) -> serde_json::Value {
+        let Some(r) = &self.repo else { return serde_json::Value::Null };
+        let flow = self.cfg.forms.get(id);
+        let models: Vec<serde_json::Value> = model_ids
+            .iter()
+            .map(|m| {
+                if let Some(name) = m.strip_prefix("ollama:") {
+                    serde_json::json!({ "id": m, "ollama": name })
+                } else if let Some(c) = r.models.comfy_model(m) {
+                    serde_json::json!({ "id": m, "file": format!("{}/{}", c.dir, c.file), "url": c.url })
+                } else if let Some(l) = r.models.local_model(m) {
+                    serde_json::json!({ "id": m, "file": format!("{}/{}", l.dir, l.file), "url": l.url })
+                } else {
+                    serde_json::json!({ "id": m })
+                }
+            })
+            .collect();
+        let llm = self.llm();
+        let env = |k: &str| Some(r.env.get(k)).filter(|v| !v.trim().is_empty());
+        let profile = self.profile();
+        let text_model = env("OLLAMA_TEXT_MODEL").or_else(|| env(profile.base_key())).unwrap_or_else(|| profile.default_base().into());
+        serde_json::json!({
+            "flow": flow.title(),
+            "script": flow.script(),
+            "settings": self.cfg.forms.settings(id),
+            "models": models,
+            "llm": {
+                "provider": llm.provider.env_value(),
+                "openrouter_model": env("OPENROUTER_MODEL"),
+                "opencode_model": env("OPENCODE_MODEL"),
+                "ollama_vision_model": llm.ollama_model,
+                "ollama_text_model": text_model,
+                "profile": profile.env_value(),
+            },
+            "gui_version": env!("CARGO_PKG_VERSION"),
+        })
+    }
+
+    /// Load / save / delete named settings of this flow's form.
+    fn presets_row(&mut self, ui: &mut egui::Ui, id: FlowId) {
+        let names: Vec<String> = self.cfg.presets.get(&id).map(|p| p.keys().cloned().collect()).unwrap_or_default();
+        let (mut load, mut delete, mut save) = (None, None, false);
+        ui.horizontal(|ui| {
+            ui.add(icons::BOOKMARK_OUTLINE.image(16.0, ui.visuals().weak_text_color()));
+            let shown = if names.is_empty() { "no presets yet".to_owned() } else { format!("Load a preset ({})", names.len()) };
+            ui.add_enabled_ui(!names.is_empty(), |ui| {
+                egui::ComboBox::from_id_salt(("presets", id)).selected_text(shown).width(200.0).show_ui(ui, |ui| {
+                    for n in &names {
+                        ui.horizontal(|ui| {
+                            if ui::tool(ui, icons::DELETE_OUTLINE, "delete this preset").clicked() {
+                                delete = Some(n.clone());
+                            }
+                            if ui.selectable_label(false, n).on_hover_text("fill the form with these settings").clicked() {
+                                load = Some(n.clone());
+                            }
+                        });
+                    }
+                });
+            });
+            let name = self.preset_name.entry(id).or_default();
+            let edit = ui.add(egui::TextEdit::singleline(name).hint_text("preset name").desired_width(150.0));
+            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let exists = names.iter().any(|n| n == name.trim());
+            let label = if exists { "Overwrite" } else { "Save preset" };
+            let tip = "saves the form as it is now under this name";
+            save = (ui::button_enabled(ui, !name.trim().is_empty(), icons::CONTENT_SAVE_OUTLINE, label).on_hover_text(tip).clicked() || enter)
+                && !name.trim().is_empty();
+        });
+        if let Some(n) = load
+            && let Some(v) = self.cfg.presets.get(&id).and_then(|p| p.get(&n)).cloned()
+        {
+            match self.cfg.forms.set_settings(id, v) {
+                Ok(()) => {
+                    self.preset_name.insert(id, n.clone());
+                    self.notify(format!("Loaded preset \"{n}\""), false);
+                }
+                Err(e) => self.notify(e, true),
+            }
+        }
+        if let Some(n) = delete {
+            if let Some(p) = self.cfg.presets.get_mut(&id) {
+                p.remove(&n);
+            }
+            self.notify(format!("Deleted preset \"{n}\""), false);
+        }
+        if save {
+            let name = self.preset_name.get(&id).map(|n| n.trim().to_owned()).unwrap_or_default();
+            let settings = self.cfg.forms.settings(id);
+            self.cfg.presets.entry(id).or_default().insert(name.clone(), settings);
+            self.notify(format!("Saved preset \"{name}\""), false);
+        }
     }
 
     /// Asked when Cancel is clicked, so a run isn't lost to a stray click.
@@ -216,7 +326,7 @@ pub(super) fn run_status(ui: &mut egui::Ui, h: &JobHandle, history: Option<&Hash
                 (None, None) => j.current_step.clone().unwrap_or_else(|| "working".into()),
             };
             let text = format!("{what} · {time}{}", eta.map(|e| format!(" · about {} left", mmss(e))).unwrap_or_default());
-            ui.add(egui::ProgressBar::new(frac.unwrap_or(0.0)).desired_width(width.max(120.0)).text(text).animate(frac.is_none()));
+            ui::progress(ui, frac, width.max(160.0), &text, ui::ACCENT);
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
         State::Finished(0) => {
@@ -252,7 +362,7 @@ pub(super) fn run_actions(ui: &mut egui::Ui, h: &JobHandle) {
 }
 
 /// Virtualized: only the visible rows are laid out, so long logs stay cheap.
-fn log_view(ui: &mut egui::Ui, h: &JobHandle) {
+pub(super) fn log_view(ui: &mut egui::Ui, h: &JobHandle) {
     let j = h.job.lock().unwrap();
     let row = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
     egui::Frame::NONE.fill(ui.visuals().extreme_bg_color).inner_margin(6.0).corner_radius(4.0).show(ui, |ui| {
@@ -274,9 +384,16 @@ fn log_line(ui: &mut egui::Ui, line: &Line) {
             Level::Warn => Some(AMBER),
             Level::Info => None,
         };
-        for (text, color, target) in segments(line) {
+        let dark = ui.visuals().dark_mode;
+        for (text, color, kind, target) in segments(line) {
             let rich = RichText::new(text).monospace();
-            let rich = match color.or(base) {
+            // the script's own ANSI colors first, then the tag, then the line's level, then the tinting
+            let tint = kind.map(|k| k.color(dark));
+            let color = match kind {
+                Some(highlight::Kind::Tag(_)) => color.or(tint),
+                _ => color.or(base).or(tint),
+            };
+            let rich = match color {
                 Some(c) => rich.color(c),
                 None => rich,
             };
@@ -302,8 +419,11 @@ enum Target {
     Path(String),
 }
 
-/// Splits a line at color changes and at links / Windows paths.
-fn segments(line: &Line) -> Vec<(&str, Option<egui::Color32>, Option<Target>)> {
+/// Splits a line at color changes, highlighted words and links / Windows paths.
+/// A piece of a log line: text, ANSI color, highlight and link target.
+type Segment<'a> = (&'a str, Option<egui::Color32>, Option<highlight::Kind>, Option<Target>);
+
+fn segments(line: &Line) -> Vec<Segment<'_>> {
     let text = line.text.as_str();
     // cut points: color range borders and link borders
     let mut links: Vec<(usize, usize, Target)> = Vec::new();
@@ -335,6 +455,9 @@ fn segments(line: &Line) -> Vec<(&str, Option<egui::Color32>, Option<Target>)> {
     let mut cuts: Vec<usize> = vec![0, text.len()];
     cuts.extend(line.colors.iter().flat_map(|(a, b, _)| [*a, *b]));
     cuts.extend(links.iter().flat_map(|(a, b, _)| [*a, *b]));
+    // links keep their own look, in one piece
+    let marks: Vec<_> = highlight::log(text).into_iter().filter(|(a, b, _)| !links.iter().any(|(s, e, _)| a < e && s < b)).collect();
+    cuts.extend(marks.iter().flat_map(|(a, b, _)| [*a, *b]));
     cuts.sort_unstable();
     cuts.dedup();
     let mut out = Vec::new();
@@ -348,7 +471,8 @@ fn segments(line: &Line) -> Vec<(&str, Option<egui::Color32>, Option<Target>)> {
             Target::Url(u) => Target::Url(u.clone()),
             Target::Path(p) => Target::Path(p.clone()),
         });
-        out.push((&text[a..b], color, target));
+        let kind = marks.iter().find(|(s, e, _)| *s <= a && b <= *e).map(|(_, _, k)| *k);
+        out.push((&text[a..b], color, kind, target));
     }
     out
 }
@@ -366,11 +490,11 @@ mod tests {
             colors: Vec::new(),
         };
         let segs = segments(&line);
-        let urls: Vec<&str> = segs.iter().filter(|(_, _, t)| matches!(t, Some(Target::Url(_)))).map(|(s, _, _)| *s).collect();
-        let paths: Vec<&str> = segs.iter().filter(|(_, _, t)| matches!(t, Some(Target::Path(_)))).map(|(s, _, _)| *s).collect();
+        let urls: Vec<&str> = segs.iter().filter(|(_, _, _, t)| matches!(t, Some(Target::Url(_)))).map(|(s, _, _, _)| *s).collect();
+        let paths: Vec<&str> = segs.iter().filter(|(_, _, _, t)| matches!(t, Some(Target::Path(_)))).map(|(s, _, _, _)| *s).collect();
         assert_eq!(urls, ["https://t.me/budyarchive/123"]);
         assert_eq!(paths, [r"C:\out\a.mp4"]);
-        assert_eq!(segs.iter().map(|(s, _, _)| *s).collect::<String>(), line.text);
+        assert_eq!(segs.iter().map(|(s, _, _, _)| *s).collect::<String>(), line.text);
     }
 
     #[test]
@@ -378,7 +502,7 @@ mod tests {
         for text in ["[chan ] 🍌 Memes und mehr 🍌 #Россия: 4 video(s)", "Abonniere @NYX_Memes für mehr!", "a ü", "x 😂 C:\\out"]
         {
             let line = Line { time: "00:00:00".into(), text: text.into(), level: Level::Info, colors: Vec::new() };
-            assert_eq!(segments(&line).iter().map(|(s, _, _)| *s).collect::<String>(), text);
+            assert_eq!(segments(&line).iter().map(|(s, _, _, _)| *s).collect::<String>(), text);
         }
     }
 }

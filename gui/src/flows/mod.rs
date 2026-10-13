@@ -198,6 +198,43 @@ impl Forms {
         }
     }
 
+    /// The form exactly as filled in, for the run's metadata.json.
+    pub fn settings(&self, id: FlowId) -> serde_json::Value {
+        let v = match id {
+            FlowId::Stickers => serde_json::to_value(&self.stickers),
+            FlowId::Animate => serde_json::to_value(&self.animate),
+            FlowId::Caricatures => serde_json::to_value(&self.caricatures),
+            FlowId::Objects => serde_json::to_value(&self.objects),
+            FlowId::Img2Video => serde_json::to_value(&self.img2video),
+            FlowId::Top5 => serde_json::to_value(&self.top5),
+            FlowId::Characters => serde_json::to_value(&self.characters),
+            FlowId::Vectorize => serde_json::to_value(&self.vectorize),
+            FlowId::SoundFx => serde_json::to_value(&self.soundfx),
+            FlowId::Comedy => serde_json::to_value(&self.comedy),
+        };
+        v.unwrap_or_default()
+    }
+
+    /// Replaces the form with saved settings (a preset); fields it lacks keep their defaults.
+    pub fn set_settings(&mut self, id: FlowId, v: serde_json::Value) -> Result<(), String> {
+        fn load<T: serde::de::DeserializeOwned>(slot: &mut T, v: serde_json::Value) -> Result<(), String> {
+            *slot = serde_json::from_value(v).map_err(|e| format!("the preset doesn't fit this form: {e}"))?;
+            Ok(())
+        }
+        match id {
+            FlowId::Stickers => load(&mut self.stickers, v),
+            FlowId::Animate => load(&mut self.animate, v),
+            FlowId::Caricatures => load(&mut self.caricatures, v),
+            FlowId::Objects => load(&mut self.objects, v),
+            FlowId::Img2Video => load(&mut self.img2video, v),
+            FlowId::Top5 => load(&mut self.top5, v),
+            FlowId::Characters => load(&mut self.characters, v),
+            FlowId::Vectorize => load(&mut self.vectorize, v),
+            FlowId::SoundFx => load(&mut self.soundfx, v),
+            FlowId::Comedy => load(&mut self.comedy, v),
+        }
+    }
+
     pub fn get_mut(&mut self, id: FlowId) -> &mut dyn Flow {
         match id {
             FlowId::Stickers => &mut self.stickers,
@@ -266,6 +303,24 @@ const IMAGES: (&str, &[&str]) = ("Images", &["jpg", "jpeg", "png", "webp", "bmp"
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn presets_round_trip_every_form() {
+        let mut forms = Forms::default();
+        for id in FlowId::ALL {
+            let saved = forms.settings(id);
+            assert!(saved.is_object(), "{}", forms.get(id).title());
+            forms.set_settings(id, saved.clone()).unwrap();
+            assert_eq!(forms.settings(id), saved);
+        }
+        // an older preset missing fields keeps the defaults for them
+        forms.set_settings(FlowId::Comedy, json!({ "topic": "x" })).unwrap();
+        assert_eq!(forms.settings(FlowId::Comedy)["topic"], "x");
+        let mut cfg = crate::config::Config::default();
+        cfg.presets.entry(FlowId::Stickers).or_default().insert("cats".into(), forms.settings(FlowId::Stickers));
+        let back: crate::config::Config = serde_json::from_str(&cfg.to_json()).unwrap();
+        assert!(back.presets[&FlowId::Stickers].contains_key("cats"));
+    }
 
     /// Checks the generated arguments against each script's real argparse (imports only, runs nothing).
     /// Needs the repo's embedded Python: `cargo test -- --ignored`

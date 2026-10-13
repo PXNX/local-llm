@@ -67,8 +67,7 @@ fn meter(ui: &mut egui::Ui, icon: Icon, name: &str, frac: f32, text: String) {
         ui.add(icon.image(18.0, c));
         ui.label(name);
     });
-    let bar = egui::ProgressBar::new(frac.clamp(0.0, 1.0)).desired_width(320.0).fill(ui::level_color(frac));
-    ui.add(bar);
+    ui::progress(ui, Some(frac), 320.0, "", ui::level_color(frac));
     ui.label(text);
     ui.end_row();
 }

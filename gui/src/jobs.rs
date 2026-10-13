@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 
@@ -108,6 +108,8 @@ pub struct Job {
     pub out_dir: PathBuf,
     pub console: bool,
     pub command: String,
+    /// The flow script's arguments (the settings of this run), shown colored on the Queue page.
+    pub args: Vec<String>,
     last_progress: bool,
     eta: Option<(Instant, Duration)>,
     /// How long each `[tag]` section of the script ran, filled in as the tag changes and finally
@@ -199,6 +201,9 @@ pub struct Launch {
     pub servers: Vec<Server>,
     pub console: bool,
     pub out_dir: PathBuf,
+    /// What the run used (flow, settings, models, LLM); completed and written to the output folder
+    /// as metadata.json when it ends.
+    pub meta: serde_json::Value,
 }
 
 #[derive(Clone)]
@@ -226,6 +231,7 @@ pub fn start(ctx: &egui::Context, l: Launch) -> JobHandle {
         out_dir: l.out_dir.clone(),
         console: l.console,
         command,
+        args: l.args.clone(),
         last_progress: false,
         eta: None,
         steps: Vec::new(),
@@ -239,7 +245,15 @@ pub fn start(ctx: &egui::Context, l: Launch) -> JobHandle {
     std::thread::Builder::new()
         .name("job".into())
         .spawn(move || {
+            let started = SystemTime::now();
+            let (out_dir, mut meta, args) = (l.out_dir.clone(), l.meta.clone(), l.args.clone());
             let state = run(&ctx, &h, l);
+            if !matches!(state, State::Cancelled) {
+                meta["args"] = args.into();
+                if let Err(e) = write_meta(&out_dir, meta, started, &state) {
+                    h.job.lock().unwrap().push(format!("[gui  ] WARNING: metadata.json not written: {e}"), false, false);
+                }
+            }
             let mut j = h.job.lock().unwrap();
             if let State::Failed(e) = &state {
                 j.push(format!("[gui  ] {e}"), true, false);
@@ -261,7 +275,9 @@ fn run(ctx: &egui::Context, h: &JobHandle, l: Launch) -> State {
         ctx.request_repaint_after(REPAINT);
     };
     let mut log_mut = log;
-    log_mut(format!("[input] {}", h.job.lock().unwrap().command));
+    // short: the script relative to the repo and its arguments - the copy button has the full command
+    let script = l.script.strip_prefix(&l.root).unwrap_or(&l.script).to_string_lossy().replace('\\', "/");
+    log_mut(format!("[input] {script} {}", l.args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")));
     for server in &l.servers {
         if let Err(e) = servers::ensure(*server, &l.root, &h.cancel, &mut log_mut) {
             return if h.cancel.load(Ordering::Relaxed) { State::Cancelled } else { State::Failed(e) };
@@ -464,6 +480,76 @@ fn quote(a: &str) -> String {
     if a.is_empty() || a.contains([' ', '"']) { format!("\"{}\"", a.replace('"', "\\\"")) } else { a.to_owned() }
 }
 
+/// Records the run in `<out_dir>/metadata.json`: the newest run first, with the files it wrote.
+/// Older runs into the same folder stay listed below it (at most 50).
+fn write_meta(out_dir: &Path, mut run: serde_json::Value, started: SystemTime, state: &State) -> std::io::Result<()> {
+    let dir = if out_dir.extension().is_some() && !out_dir.is_dir() { out_dir.parent().unwrap_or(out_dir) } else { out_dir };
+    if !dir.is_dir() {
+        return Ok(()); // the run made no output folder (failed early) - nothing to describe
+    }
+    let ended = SystemTime::now();
+    run["started"] = iso_time(started).into();
+    run["finished"] = iso_time(ended).into();
+    run["seconds"] = ended.duration_since(started).map_or(0, |d| d.as_secs()).into();
+    run["result"] = match state {
+        State::Finished(0) => "done".into(),
+        State::Finished(code) => format!("failed (exit code {code})").into(),
+        State::Failed(e) => format!("failed: {e}").into(),
+        State::Cancelled | State::Running => "cancelled".into(),
+    };
+    let mut outputs = Vec::new();
+    new_files(dir, dir, started, 3, &mut outputs);
+    outputs.sort();
+    run["outputs"] = outputs.into();
+    let path = dir.join("metadata.json");
+    let mut runs: Vec<serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["runs"].as_array().cloned())
+        .unwrap_or_default();
+    runs.insert(0, run);
+    runs.truncate(50);
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "runs": runs })).expect("json") + "\n";
+    std::fs::write(path, text)
+}
+
+/// Files under `dir` (relative, `/`-separated) changed since `since`, up to `depth` folders down.
+fn new_files(base: &Path, dir: &Path, since: SystemTime, depth: u32, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        let Ok(md) = e.metadata() else { continue };
+        if md.is_dir() {
+            if depth > 0 {
+                new_files(base, &p, since, depth - 1, out);
+            }
+        } else if out.len() < 500
+            && p.file_name().is_some_and(|n| n != "metadata.json")
+            && md.modified().is_ok_and(|m| m >= since)
+            && let Ok(rel) = p.strip_prefix(base)
+        {
+            out.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+}
+
+/// UTC "YYYY-MM-DDTHH:MM:SSZ" (no date crate needed for one timestamp).
+fn iso_time(t: SystemTime) -> String {
+    let secs = t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
+    // days since 1970-01-01 -> civil date (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem / 60 % 60, rem % 60)
+}
+
 pub fn open_dir(p: &Path) {
     let dir = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
     sys::open(dir);
@@ -472,6 +558,13 @@ pub fn open_dir(p: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iso_time_formats_utc() {
+        let t = std::time::UNIX_EPOCH + Duration::from_secs(1_791_926_061); // 2026-10-13 21:14:21
+        assert_eq!(iso_time(t), "2026-10-13T21:14:21Z");
+        assert_eq!(iso_time(std::time::UNIX_EPOCH), "1970-01-01T00:00:00Z");
+    }
 
     fn blank_job() -> Job {
         Job {
@@ -484,6 +577,7 @@ mod tests {
             out_dir: PathBuf::new(),
             console: false,
             command: String::new(),
+            args: Vec::new(),
             last_progress: false,
             eta: None,
             steps: Vec::new(),
@@ -580,6 +674,7 @@ mod run_tests {
                 servers: Vec::new(),
                 console: false,
                 out_dir: out.clone(),
+                meta: serde_json::Value::Null,
                 root,
             },
         );
@@ -611,6 +706,7 @@ mod run_tests {
                 servers: Vec::new(),
                 console: false,
                 out_dir: PathBuf::new(),
+                meta: serde_json::Value::Null,
                 root,
             },
         );
@@ -623,6 +719,7 @@ mod run_tests {
         }
         let j = h.job.lock().unwrap();
         assert_eq!(j.state, State::Cancelled);
-        assert_eq!(j.lines.front().map(|l| l.text.as_str()), Some("sleeping"));
+        // after the "[input] <command>" line the GUI logs first
+        assert!(j.lines.iter().any(|l| l.text == "sleeping"));
     }
 }

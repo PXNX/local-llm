@@ -12,12 +12,12 @@ pub struct Vectorize {
     image: String,
     style: String,
     mode: String,
-    out: String,
+    out_dir: String,
 }
 
 impl Default for Vectorize {
     fn default() -> Self {
-        Self { image: String::new(), style: "photo".into(), mode: "color".into(), out: String::new() }
+        Self { image: String::new(), style: "photo".into(), mode: "color".into(), out_dir: String::new() }
     }
 }
 
@@ -48,8 +48,8 @@ impl Flow for Vectorize {
             w::label(ui, "Colors", "");
             w::choice(ui, "mode", &mut self.mode, &[("color", "color"), ("bw", "black & white")]);
             ui.end_row();
-            w::label(ui, "Output .svg", "");
-            w::file(ui, &mut self.out, ("SVG", &["svg"]), "default: next to the image");
+            w::label(ui, "Output folder", "");
+            w::folder(ui, &mut self.out_dir, "default: next to the image");
             ui.end_row();
         });
     }
@@ -59,7 +59,7 @@ impl Flow for Vectorize {
         let mut a = vec![self.image.trim().to_owned()];
         opt(&mut a, "--style", &self.style);
         opt(&mut a, "--mode", &self.mode);
-        opt(&mut a, "--out", &self.out);
+        opt(&mut a, "--out-dir", &self.out_dir);
         Ok(a)
     }
 
@@ -67,9 +67,13 @@ impl Flow for Vectorize {
         Needs::default()
     }
 
-    fn out_dir(&self, root: &Path) -> PathBuf {
-        let p = if self.out.trim().is_empty() { self.image.trim() } else { self.out.trim() };
-        Path::new(p).parent().map(Path::to_path_buf).unwrap_or_else(|| root.to_path_buf())
+    fn out_dir(&self, _root: &Path) -> PathBuf {
+        let image = Path::new(self.image.trim());
+        if self.out_dir.trim().is_empty() {
+            image.parent().map(Path::to_path_buf).unwrap_or_default()
+        } else {
+            PathBuf::from(self.out_dir.trim())
+        }
     }
 
     fn drop_files(&mut self, files: Vec<PathBuf>) {

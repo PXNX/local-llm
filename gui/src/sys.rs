@@ -123,3 +123,56 @@ pub fn open(path: &Path) {
 pub fn open_url(url: &str) {
     let _ = open::that_detached(url);
 }
+
+/// Windows started from buttons, by key: pressing a button again while its window is still open doesn't
+/// stack up another one.
+#[derive(Default)]
+pub struct Launched(std::collections::HashMap<String, (std::process::Child, std::time::Instant)>);
+
+impl Launched {
+    /// True while what was started under `key` still runs, or for `min` after it was started (for
+    /// launchers like `cmd /C start` that hand the window off and exit at once).
+    pub fn busy(&mut self, key: &str, min: std::time::Duration) -> bool {
+        match self.0.get_mut(key) {
+            Some((child, at)) => at.elapsed() < min || matches!(child.try_wait(), Ok(None)),
+            None => false,
+        }
+    }
+
+    /// Starts `cmd` unless `key` is busy. Ok(false): not started, the earlier one is still open.
+    pub fn spawn(&mut self, key: &str, cmd: &mut Command, min: std::time::Duration) -> std::io::Result<bool> {
+        if self.busy(key, min) {
+            return Ok(false);
+        }
+        let child = cmd.spawn()?;
+        self.0.insert(key.to_owned(), (child, std::time::Instant::now()));
+        Ok(true)
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn launched_blocks_a_second_window_while_the_first_runs() {
+        let mut l = Launched::default();
+        let wait = || {
+            let mut c = Command::new("ping");
+            c.args(["-n", "3", "127.0.0.1"]).stdout(std::process::Stdio::null());
+            hide_window(&mut c);
+            c
+        };
+        assert!(l.spawn("x", &mut wait(), Duration::ZERO).unwrap());
+        assert!(!l.spawn("x", &mut wait(), Duration::ZERO).unwrap(), "second start while the first runs");
+        assert!(l.spawn("y", &mut wait(), Duration::ZERO).unwrap(), "other keys are independent");
+        let mut quick = Command::new("cmd");
+        quick.args(["/C", "exit"]);
+        hide_window(&mut quick);
+        assert!(l.spawn("q", &mut quick, Duration::ZERO).unwrap());
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(!l.busy("q", Duration::ZERO), "ended");
+        assert!(l.busy("q", Duration::from_secs(60)), "but within the hand-off time");
+    }
+}

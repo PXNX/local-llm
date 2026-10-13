@@ -1,7 +1,7 @@
 """Turn finished stickers (make_stickers.py output) into animated Telegram video stickers.
 
 Telegram video sticker rules: WebM VP9 with transparency, 512 px on the long side, max 3 s,
-max 30 fps, max 256 KB, no audio. Each input sticker gets a looping <name>.webm next to it.
+max 30 fps, max 256 KB, no audio. Each input sticker gets a looping <name>.webm next to it (or in --out <folder>).
 
 Modes:
   ai (default) - the character on the sticker really acts out its pose: Wan 2.2 TI2V 5B in ComfyUI
@@ -268,6 +268,8 @@ def main():
                     help="ai mode: the action, e.g. 'the cat waves its raised paw' (default: derived from the pose)")
     ap.add_argument("--steps", type=int, default=20, help="ai mode: sampling steps (default 20)")
     ap.add_argument("--seed", type=int, default=0, help="ai mode: seed (default 0)")
+    ap.add_argument("--out", type=Path, default=None,
+                    help="output folder for the .webm files (default: next to each sticker)")
     args = ap.parse_args()
 
     files = []
@@ -310,6 +312,9 @@ def main():
             if pingpong:
                 frames = frames + frames[-2:0:-1]
         out = f.with_suffix(".webm")
+        if args.out:
+            args.out.mkdir(parents=True, exist_ok=True)
+            out = args.out / out.name
         size, crf = encode_webm(frames, fps, out)
         print(f"[done   ] {out}  ({size // 1024} KB, crf {crf})")
         if size > MAX_BYTES:

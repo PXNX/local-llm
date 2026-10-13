@@ -2,6 +2,7 @@ mod flow_page;
 mod health_panel;
 mod home;
 mod models_page;
+mod coding_page;
 mod queue_page;
 mod settings_page;
 mod setup;
@@ -18,10 +19,12 @@ use crate::envfile::EnvFile;
 use crate::flows::{FlowId, Llm, Needs, Provider};
 use crate::health::Health;
 use crate::icons;
-use crate::jobs::{self, JobHandle, Launch};
+use crate::jobs::{self, JobHandle, Launch, State};
 use crate::models::{Models, Status, ollama_id};
 use crate::paths::{self, Paths};
 use crate::servers::{self, Server, Servers};
+use crate::taskbar::sound::{self, Cue};
+use crate::taskbar::{Progress, Taskbar};
 use crate::ui::{self, AMBER, GREEN, RED};
 
 /// Repo-bound state, created once the local-llm folder is known.
@@ -42,6 +45,16 @@ pub struct App {
     /// Only one flow runs at a time (GPU); the rest waits here and runs in order.
     running: Option<FlowId>,
     queue: VecDeque<(FlowId, Launch)>,
+    /// The queue is on hold: waiting runs don't start by themselves until Start is pressed.
+    held: bool,
+    taskbar: Taskbar,
+    coding: coding_page::Shared,
+    /// The run whose log is shown on the Queue page (its job's address).
+    queue_open: Option<usize>,
+    /// Preset name typed on each flow's page.
+    preset_name: HashMap<FlowId, String>,
+    /// Windows started from buttons (setup.bat, git, editors, servers), so they aren't opened twice.
+    launched: crate::sys::Launched,
     /// Runs started this session, newest first (the running one included), for the Queue page.
     recent: VecDeque<(FlowId, JobHandle)>,
     /// Flow whose setup dialog is open.
@@ -85,6 +98,12 @@ impl App {
             jobs: HashMap::new(),
             running: None,
             queue: VecDeque::new(),
+            held: false,
+            taskbar: Taskbar::new(cc),
+            coding: Default::default(),
+            queue_open: None,
+            preset_name: HashMap::new(),
+            launched: Default::default(),
             recent: VecDeque::new(),
             prompt: None,
             prompted: None,
@@ -197,6 +216,15 @@ impl App {
         env.is_empty() && models.is_empty()
     }
 
+    /// Opens a console/app window from a button, unless the one it opened before is still open.
+    pub(super) fn launch_once(&mut self, key: &str, cmd: &mut std::process::Command, what: &str) {
+        match self.launched.spawn(key, cmd, Duration::from_secs(3)) {
+            Ok(true) => {}
+            Ok(false) => self.notify(format!("{what} is already open - close its window to start it again"), false),
+            Err(e) => self.notify(format!("could not start {what}: {e}"), true),
+        }
+    }
+
     pub fn notify(&mut self, text: impl Into<String>, error: bool) {
         self.notice = Some((text.into(), error, Instant::now()));
     }
@@ -218,19 +246,45 @@ impl App {
                 if !j.history_merged {
                     j.history_merged = true;
                     let steps = std::mem::take(&mut j.steps);
+                    let cue = match j.state {
+                        State::Finished(0) if self.queue.is_empty() => Some(Cue::QueueDone),
+                        State::Finished(0) => Some(Cue::RunDone),
+                        State::Finished(_) | State::Failed(_) => Some(Cue::RunFailed),
+                        State::Cancelled | State::Running => None,
+                    };
                     drop(j);
                     self.merge_step_history(id, steps);
+                    if let Some(cue) = cue.filter(|_| self.cfg.sounds) {
+                        sound::play(cue);
+                    }
                 }
             }
         }
         self.running = None;
-        if let Some((id, launch)) = self.queue.pop_front() {
-            let h = jobs::start(&self.ctx, launch);
-            self.recent.push_front((id, h.clone()));
-            self.recent.truncate(MAX_RECENT);
-            self.jobs.insert(id, h);
-            self.running = Some(id);
+        if self.queue.is_empty() {
+            self.held = false;
+        } else if !self.held
+            && let Some((id, launch)) = self.queue.pop_front()
+        {
+            self.start(id, launch);
         }
+    }
+
+    /// The running flow's progress for the taskbar button; paused while the queue waits on hold.
+    fn taskbar_progress(&self) -> Progress {
+        match self.running_job() {
+            Some((_, h)) => h.job.lock().unwrap().progress.fraction().map_or(Progress::Busy, Progress::Value),
+            None if self.held => Progress::Paused,
+            None => Progress::None,
+        }
+    }
+
+    fn start(&mut self, id: FlowId, launch: Launch) {
+        let h = jobs::start(&self.ctx, launch);
+        self.recent.push_front((id, h.clone()));
+        self.recent.truncate(MAX_RECENT);
+        self.jobs.insert(id, h);
+        self.running = Some(id);
     }
 
     /// Asks before cancelling the flow's running run.
@@ -327,6 +381,8 @@ impl App {
                     if server == Server::Comfy && ui::tool(ui, icons::OPEN_IN_NEW, "open ComfyUI in the browser").clicked() {
                         crate::sys::open_url("http://127.0.0.1:8188");
                     }
+                } else if servers::starting(server) {
+                    ui.spinner().on_hover_text(format!("{} is starting ...", server.name()));
                 } else if let Some(r) = &self.repo
                     && ui::tool(ui, icons::POWER, &format!("start {}", server.name())).clicked()
                 {
@@ -353,12 +409,15 @@ impl App {
             if ui.link(text).on_hover_text("vision LLM - change in Settings").clicked() {
                 self.select(Page::Settings);
             }
+            ui.separator();
+            self.profile_toggle(ui);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // one compact indicator for the whole queue; details on the Queue page
+                let held = if self.held { " on hold" } else { "" };
                 let waiting = match self.queue.len() {
                     0 => String::new(),
-                    n => format!(" · +{n} queued"),
+                    n => format!(" · +{n} queued{held}"),
                 };
                 if let Some((id, h)) = self.running_job() {
                     let history = self.cfg.step_times.get(&id);
@@ -372,14 +431,14 @@ impl App {
                         eta.map(|e| format!(" · {} left", mmss(e))).unwrap_or_default()
                     );
                     drop(j);
-                    let bar = egui::ProgressBar::new(frac.unwrap_or(0.0)).desired_width(300.0).text(text).animate(frac.is_none());
                     // a progress bar only senses hover by itself
-                    let bar = ui.add(bar).interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    let bar = ui::progress(ui, frac, 300.0, &text, ui::ACCENT).interact(egui::Sense::click());
+                    let bar = bar.on_hover_cursor(egui::CursorIcon::PointingHand);
                     if bar.on_hover_text("open the queue").clicked() {
                         self.select(Page::Queue);
                     }
                     ui.ctx().request_repaint_after(Duration::from_secs(1));
-                } else if !self.queue.is_empty() && ui.link(format!("{} queued", self.queue.len())).clicked() {
+                } else if !self.queue.is_empty() && ui.link(format!("{} queued{held}", self.queue.len())).clicked() {
                     self.select(Page::Queue);
                 }
                 if let Some(r) = &self.repo
@@ -406,11 +465,12 @@ impl App {
         if nav_item(ui, self.cfg.page == Page::Home, icons::HOME, "Start") {
             clicked = Some(Page::Home);
         }
+        let wait = if self.held { "⏸" } else { "⏳" };
         let queue = match (self.running.is_some(), self.queue.len()) {
             (false, 0) => "Queue".to_owned(),
             (true, 0) => "Queue  ▶".to_owned(),
-            (false, n) => format!("Queue  ⏳{n}"),
-            (true, n) => format!("Queue  ▶ ⏳{n}"),
+            (false, n) => format!("Queue  {wait}{n}"),
+            (true, n) => format!("Queue  ▶ {wait}{n}"),
         };
         if nav_item(ui, self.cfg.page == Page::Queue, icons::PLAYLIST_PLAY, &queue) {
             clicked = Some(Page::Queue);
@@ -436,7 +496,7 @@ impl App {
         }
         ui.add_space(4.0);
         ui.label(RichText::new("MANAGE").small().weak());
-        for (page, icon, label) in [(Page::Models, icons::DATABASE, "Models"), (Page::Settings, icons::COG, "Settings")] {
+        for (page, icon, label) in [(Page::Coding, icons::ROBOT, "Coding"), (Page::Models, icons::DATABASE, "Models"), (Page::Settings, icons::COG, "Settings")] {
             if nav_item(ui, self.cfg.page == page, icon, label) {
                 clicked = Some(page);
             }
@@ -520,6 +580,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.tick();
         self.pump_queue();
+        self.taskbar.set(self.taskbar_progress());
 
         if ui.ctx().input(|i| i.viewport().close_requested()) && !self.allow_close {
             if self.running.is_some() || !self.queue.is_empty() {
@@ -554,6 +615,7 @@ impl eframe::App for App {
                 Page::Home => self.home_page(ui),
                 Page::Flow(id) => self.flow_page(ui, id),
                 Page::Queue => self.queue_page(ui),
+                Page::Coding => self.coding_page(ui),
                 Page::Models => self.models_page(ui),
                 Page::Settings => self.settings_page(ui),
             }
