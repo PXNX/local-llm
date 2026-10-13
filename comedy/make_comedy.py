@@ -135,6 +135,10 @@ def main():
         faces |= {f for sc in script["scenes"] for b in sc["beats"] for n, f in (b.get("react") or {}).items() if n == m["name"]}
         faces |= {"shocked"} if any(b.get("target") == m["name"] for sc in script["scenes"] for b in sc["beats"]) else set()
         sprites[m["name"]] = cs.character(m, sorted(f for f in faces if f))
+        # the thumbnail may also use expressive faces the sketch doesn't, but only ones already drawn
+        for f, p in cast_mod.Cast(seed=script["seed"]).character(m, render.THUMB_FACES).items():
+            if p and cast_mod._variant_key(cast_mod.FACE_PROMPTS[f]) in Path(p).stem:
+                sprites[m["name"]].setdefault(f, p)
     burned = {b.get("target") for sc in script["scenes"] for b in sc["beats"] if b.get("event") == "hit"} | \
              {b.get("thing") for sc in script["scenes"] for b in sc["beats"] if b.get("event") == "explode"}
     for thing in writer.things(script):
