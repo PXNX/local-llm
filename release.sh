@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # New GUI release (semver): bumps gui/Cargo.toml (+ Cargo.lock), builds local-llm.exe locally with the release
-# profile (clippy, tests, build), then commits, tags vX.Y.Z and pushes. The tag starts
-# .github/workflows/gui.yml, which builds again and publishes the GitHub release - nothing is uploaded from here.
+# profile (clippy, tests, build), then commits, tags vX.Y.Z and pushes. The push to main starts
+# .github/workflows/gui.yml, which builds again and publishes the GitHub release for the new version (any
+# version bump pushed to main does, even without this script) - nothing is uploaded from here.
 #   release.sh                 patch bump (0.1.0 -> 0.1.1)
 #   release.sh minor|major     0.1.0 -> 0.2.0 | 1.0.0
 #   release.sh 1.2.3[-rc.1]    exact version (a -suffix makes a GitHub pre-release)
