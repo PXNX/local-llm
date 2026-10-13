@@ -25,8 +25,9 @@ sys.path.insert(0, str(HERE.parent))
 from common import log, storage  # noqa: E402
 
 MODELS = storage.path("kokoro")
-if not (MODELS / "kokoro-v1.0.onnx").exists() and (HERE / "models" / "kokoro-v1.0.onnx").exists():
-    MODELS = HERE / "models"  # downloaded by an older version, until moved (GUI > Models > Move them)
+if not (MODELS / "kokoro-v1.0.onnx").exists():
+    # downloaded by an older version, until moved (GUI > Models > Move them)
+    MODELS = next((d for d in (HERE / "models", HERE.parent / "kokoro") if (d / "kokoro-v1.0.onnx").exists()), MODELS)
 CACHE = HERE / "cache" / "tts"
 SR = 44100
 KOKORO_FILES = {

@@ -101,6 +101,8 @@ pub fn old_stores(paths: &Paths, dir: &Path, home: &Path, var: impl Fn(&str) -> 
     let mut out = vec![
         store("ComfyUI", paths.comfy_models(), dir.to_path_buf()),
         store("Kokoro", paths.root.join("comedy").join("models"), dir.join("kokoro")),
+        // written by an older GUI version that resolved the Kokoro folder against the checkout
+        store("Kokoro", paths.root.join("kokoro"), dir.join("kokoro")),
     ];
     if let Some(m) = prev.models {
         out.push(store("previous models folder", m.to_path_buf(), dir.to_path_buf()));
@@ -175,6 +177,7 @@ mod tests {
         for d in [
             paths.comfy_models(),
             root.join("comedy/models"),
+            root.join("kokoro"),
             home.join(".ollama/models/blobs"),
             home.join(".cache/huggingface/hub"),
             home.join(".u2net"),
@@ -191,6 +194,7 @@ mod tests {
             vec![
                 ("ComfyUI", paths.comfy_models(), dir.clone()),
                 ("Kokoro", root.join("comedy/models"), dir.join("kokoro")),
+                ("Kokoro", root.join("kokoro"), dir.join("kokoro")),
                 ("Ollama", home.join(".ollama/models/blobs"), dir.join("ollama/blobs")),
                 ("Hugging Face", home.join(".cache/huggingface/hub"), dir.join("huggingface/hub")),
                 ("rembg", home.join(".u2net"), dir.join("u2net")),
