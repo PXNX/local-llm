@@ -2,7 +2,6 @@
 workers) that says, for every moment, where everything is, which face it makes, what the camera
 frames, which line is spoken and what explodes."""
 import numpy as np
-from PIL import Image
 
 import cast as cast_mod
 import scene as scene_mod
@@ -19,7 +18,7 @@ INTRO = 0.6
 def _aspect(path, kind):
     if path is None:
         return 0.62 if kind == "char" else 1.3
-    with Image.open(path) as im:
+    with cast_mod.open_image(path, 256) as im:
         return im.width / im.height
 
 

@@ -92,6 +92,47 @@ class Sprite:
         return im
 
 
+class SvgSprite:
+    """A vector drawing re-rasterized at the size it is shown at, so close-ups stay sharp. Heights
+    are rounded up to ~5% steps (rasterized once per step, then scaled down a little to the exact
+    size), so a slow camera push-in doesn't re-render the SVG every frame."""
+
+    STEP = 1.05
+
+    def __init__(self, path):
+        self.svg = Path(path).read_text(encoding="utf-8")
+        ref = cast_mod.render_svg(self.svg, 1024)
+        x0, y0, x1, y1 = ref.getchannel("A").getbbox() or (0, 0, ref.width, ref.height)
+        self.box = (x0 / ref.width, y0 / ref.height, x1 / ref.width, y1 / ref.height)
+        self.aspect = (x1 - x0) / (y1 - y0)
+        self.rasters = OrderedDict()
+        self.cache = OrderedDict()
+
+    def _raster(self, h):
+        step = self.STEP ** math.ceil(math.log(h, self.STEP))
+        if step not in self.rasters:
+            x0, y0, x1, y1 = self.box
+            full = cast_mod.render_svg(self.svg, round(step / (y1 - y0)))
+            W, H = full.size
+            self.rasters[step] = full.crop((round(x0 * W), round(y0 * H), round(x1 * W), round(y1 * H)))
+            if len(self.rasters) > 4:
+                self.rasters.popitem(last=False)
+        self.rasters.move_to_end(step)
+        return self.rasters[step]
+
+    def get(self, w, h):
+        w, h = max(1, int(w)), max(1, int(h))
+        key = (w, h)
+        if key in self.cache:
+            self.cache.move_to_end(key)
+            return self.cache[key]
+        im = self._raster(h).resize((w, h), Image.LANCZOS)
+        self.cache[key] = im
+        if len(self.cache) > 12:
+            self.cache.popitem(last=False)
+        return im
+
+
 class Rig:
     """A character cutout auto-split at the neck into a head and a body Sprite, so the head can nod
     and bob on its own instead of the whole cutout squashing as one piece (--limbs).
@@ -157,6 +198,9 @@ class Renderer:
         key = (name, state)
         if key not in self.sprites:
             path = self.p["sprites"].get(name, {}).get(state)
+            if path and Path(path).suffix.lower() == ".svg":
+                self.sprites[key] = SvgSprite(path)
+                return self.sprites[key]
             if path:
                 img = Image.open(path)
             elif kind == "char":
@@ -172,7 +216,7 @@ class Renderer:
         key = (name, state)
         if key not in self.rigs:
             path = self.p["sprites"].get(name, {}).get(state)
-            img = Image.open(path) if path else cast_mod.placeholder_person(name, state)
+            img = cast_mod.open_image(path, h * ZOOM_MAX * 1.5) if path else cast_mod.placeholder_person(name, state)
             self.rigs[key] = Rig(img, h * ZOOM_MAX)
         return self.rigs[key]
 
