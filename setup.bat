@@ -9,18 +9,15 @@ set "PY=%~dp0ComfyUI_windows_portable\python_embeded\python.exe"
 
 echo === Ollama + Bun + Deno (winget)
 winget list --id Ollama.Ollama -e >nul 2>&1 || winget install --id Ollama.Ollama -e --silent --accept-package-agreements --accept-source-agreements
-rem Bun: installs and self-updates OpenCode (npm package opencode-ai), winget's own SST.opencode package lags behind upstream
+rem Bun: builds OpenCode 2 (not on npm yet) and installs Pi
 winget list --id Oven-sh.Bun -e >nul 2>&1 || winget install --id Oven-sh.Bun -e --silent --accept-package-agreements --accept-source-agreements
 rem Deno: JavaScript runtime yt-dlp needs for YouTube (6-characters.bat)
 winget list --id DenoLand.Deno -e >nul 2>&1 || winget install --id DenoLand.Deno -e --silent --accept-package-agreements --accept-source-agreements
 
-echo === OpenCode (bun global install, self-updating)
-"%USERPROFILE%\.bun\bin\bun.exe" install -g opencode-ai
-
 echo === Pi coding agent (bun global install, terminal agent for local Ollama models)
 "%USERPROFILE%\.bun\bin\bun.exe" install -g @earendil-works/pi-coding-agent
 
-echo === OpenCode 2 for opencode-wrap (LLM_PROVIDER=opencode, built from source with bun, a few minutes once)
+echo === OpenCode 2 for T3 Code and opencode-wrap (built from source with bun, a few minutes once; re-run to update)
 call "%~dp0opencode-wrap\install-opencode2.bat"
 
 rem Large context with little VRAM (applies after Ollama restarts)
@@ -50,6 +47,10 @@ for %%F in (models settings) do (
     echo Exists already, not overwritten. Template: config\pi-%%F.json
   )
 )
+rem Ollama rejects object tool schemas without "properties" (T3 Code's MCP tools); this extension adds them
+mkdir "%USERPROFILE%\.pi\agent\extensions" 2>nul
+copy /y "%~dp0config\pi-ollama-schema-fix.ts" "%USERPROFILE%\.pi\agent\extensions\ollama-schema-fix.ts" >nul
+echo Installed %USERPROFILE%\.pi\agent\extensions\ollama-schema-fix.ts
 
 echo === ComfyUI portable %COMFY_VER% (~2 GB)
 if not exist "%PY%" (
@@ -84,5 +85,7 @@ echo.
 echo Done. Next steps:
 echo   1. Update the NVIDIA driver to ^>= 580 (needed by ComfyUI, see README).
 echo   2. Run 0-download-all.bat to download the models.
-echo   3. T3 Code: Settings ^> Providers ^> OpenCode, enable it (default model: free opencode/muse-spark-1.3-contributor-free).
+echo   3. T3 Code (nightly/preview ^>= 0.0.46): Settings ^> Providers ^> OpenCode, enable it with binary
+echo      %USERPROFILE%\.opencode2\bin\opencode.exe (default model: free opencode/muse-spark-1.3-contributor-free).
+echo      Optional: Pi with binary %USERPROFILE%\.bun\bin\pi.exe for the local JetBrains model.
 pause
