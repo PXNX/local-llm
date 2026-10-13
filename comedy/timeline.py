@@ -50,6 +50,7 @@ def build(script, sprites, voice_fn, W, H, fps, end_card=True, subtitles=True, h
     if end_card:
         chars = [m["name"] for m in script["cast"]][:4]
         scenes.append({"background": "plain", "label": "", "stage": chars, "end": True,
+                       "music": "none" if scenes and scenes[-1].get("music") == "none" else "bouncy",  # outro
                        "beats": [{"who": c, "do": "jump"} for c in chars] + [{"pause": 1.6}]})
     for si, sc in enumerate(scenes):
         kind = sc["background"]
@@ -194,6 +195,7 @@ def build(script, sprites, voice_fn, W, H, fps, end_card=True, subtitles=True, h
             shots = [(t0, "wide", None)]
         path = (bg_paths or {}).get(si)
         plan["scenes"].append({"t0": t0, "t1": t, "kind": kind, "label": sc.get("label", ""), "bg_path": path,
+                               "music": sc.get("music", "deadpan"),
                                "seed": seed + si, "items": items, "shots": shots, "flights": flights,
                                "booms": booms, "ground": top, "end": bool(sc.get("end"))})
         if sc.get("end"):

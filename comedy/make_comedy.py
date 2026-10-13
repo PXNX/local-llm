@@ -12,6 +12,7 @@ Usage (via 12-comedy.bat / 12-comedy-preview.bat, which use ComfyUI's embedded P
   12-comedy.bat --topic "Trump wants to buy Greenland" [--cast Trump --cast "Mette Frederiksen"]
   12-comedy-preview.bat --topic "..."           480p 30 fps, quick check of the timing
   12-comedy.bat --script comedy\\out\\<name>\\script.json   render an (edited) script in 1080p 60 fps
+  12-comedy.bat ... --art svg                    vector drawings (traced once, sharp close-ups)
 Result: comedy/out/<title>/<title>.mp4 (+ _preview.mp4, _thumbnail.jpg, script.json, script.txt)
 """
 import argparse
@@ -53,11 +54,49 @@ def known_names():
     return sorted(set(n.replace("_", " ") for n in names))
 
 
+def parse_cast(values):
+    """--cast values -> (names, {name: picture}): "Trump" or "Trump=C:\\...\\cutout.png" (a file or a folder)."""
+    names, images = [], {}
+    for v in values:
+        name, _, pic = v.partition("=")
+        name, pic = name.strip(), pic.strip().strip('"')
+        if not name:
+            continue
+        names.append(name)
+        if pic:
+            if not Path(pic).exists():
+                sys.exit(f"--cast {name}: picture not found: {pic}")
+            images[name] = str(Path(pic).resolve())
+    return names, images
+
+
+def bind_images(script, images):
+    """Gives the cast members named in --cast Name=picture their picture (script.json "image")."""
+    bind(script, images, "image")
+
+
+def bind(script, values, key):
+    """Sets cast member `key` in script.json for the names in values ({name: value})."""
+    for name, value in values.items():
+        k = writer._key(name)
+        m = next((m for m in script["cast"] if k in (writer._key(m["name"]), writer._key(m["who"]))), None) or \
+            next((m for m in script["cast"] if k.split()[-1] in writer._key(m["name"] + " " + m["who"]).split()), None)
+        if m is None:
+            print(f"[cast   ] {name} is not in the sketch, its {key} is unused")
+        else:
+            m[key] = value
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--topic", help="what the sketch is about, e.g. \"Putin explains the refinery fires\"")
     ap.add_argument("--script", type=Path, help="render this script.json (written earlier, maybe edited) instead of writing a new one")
-    ap.add_argument("--cast", action="append", default=[], help="character to use (repeatable), e.g. --cast Trump")
+    ap.add_argument("--cast", action="append", default=[], help="character to use (repeatable), e.g. --cast Trump; "
+                    "Name=picture uses that drawing instead of a caricature, e.g. --cast \"Trump=characters\\out\\"
+                    "Trump\\x_cutout.png\" (a PNG/WebP/SVG, or a folder: per face by file name, else cycled)")
+    ap.add_argument("--personality", action="append", default=[], metavar="NAME=TEXT",
+                    help="how a character talks and behaves (repeatable), e.g. --personality \"Trump=boastful, "
+                    "repeats himself\" - shapes the dialogue and the voice; kept in script.json")
     ap.add_argument("--lang", default="English", help="dialogue language (default English; Kokoro: English, Spanish, "
                     "French, Italian, Portuguese, Hindi, Japanese, Chinese - others use the Windows voices)")
     ap.add_argument("--seconds", type=int, default=60, help="rough length of the sketch (default 60)")
@@ -70,7 +109,14 @@ def main():
     ap.add_argument("--use-screenshots", action="store_true", help="use flow 6 screenshots (characters/out) for "
                     "characters without caricatures - those are the channel's own designs, not for publishing")
     ap.add_argument("--voice-engine", choices=["auto", "kokoro", "sapi"], default="auto")
-    ap.add_argument("--music", choices=["calm", "funny", "none"], default="calm", help="quiet music bed (default calm)")
+    ap.add_argument("--music", choices=["auto", "calm", "funny", "none"], default="auto",
+                    help="quiet music bed: auto = fits each scene (the script's per-scene mood: deadpan, bouncy, "
+                    "tense, pompous, sad, sneaky, triumphant, none - default); calm/funny/none = one bed for the "
+                    "whole sketch")
+    ap.add_argument("--art", choices=["raster", "svg"], default="raster",
+                    help="raster = bitmap drawings only, .svg files are ignored (default); svg = vector drawings: an "
+                    ".svg next to a drawing is used, else it is traced once with vtracer and cached as <name>.svg "
+                    "(sharp close-ups, slower render)")
     ap.add_argument("--limbs", action="store_true", help="animate the head separately from the body (it nods/bobs "
                     "while talking, instead of the whole cutout squashing as one piece) - split automatically at "
                     "the neck, no extra drawings needed")
@@ -85,6 +131,9 @@ def main():
     if not args.topic and not args.script:
         ap.error("give --topic \"...\" or --script path\\to\\script.json")
     started = time.time()
+    cast_names, cast_images = parse_cast(args.cast)
+    personalities = {n.strip(): t.strip() for n, _, t in (p.partition("=") for p in args.personality)
+                     if n.strip() and t.strip()}
 
     # ---- 1. write
     if args.script:
@@ -97,7 +146,8 @@ def main():
             sys.exit("No LLM available: set OPENROUTER_API_KEY in .env or start Ollama.")
         for attempt in range(3):
             try:
-                script = writer.normalize(writer.write(args.topic, args.lang, args.seconds, args.cast, known_names(), llm))
+                script = writer.normalize(writer.write(args.topic, args.lang, args.seconds, cast_names, known_names(), llm,
+                                                              personalities))
                 break
             except (ValueError, RuntimeError, KeyError, TypeError) as e:
                 print(f"[write  ] unusable script ({str(e)[:150]}), trying again ...")
@@ -105,6 +155,8 @@ def main():
             sys.exit("The LLM did not write a usable script, try again or another --topic.")
         llm.unload()
         folder = args.out / f"{cast_mod.mc.slug(script['title'])[:60]}_{dt.date.today():%Y%m%d}"
+    bind_images(script, cast_images)
+    bind(script, personalities, "personality")
     script.setdefault("seed", args.seed if args.seed is not None else random.randint(0, 2**31))
     script["lang"] = args.lang if not args.script else raw.get("lang", args.lang)
     folder.mkdir(parents=True, exist_ok=True)
@@ -125,7 +177,7 @@ def main():
     if not generate:
         print("[cast   ] " + ("drawing disabled" if args.no_generate else "ComfyUI is not running") +
               ": missing drawings become placeholders")
-    cs = cast_mod.Cast(generate=generate, use_screenshots=args.use_screenshots, seed=script["seed"])
+    cs = cast_mod.Cast(generate=generate, use_screenshots=args.use_screenshots, seed=script["seed"], art=args.art)
     if args.use_screenshots:
         print("[cast   ] note: flow-6 screenshots are the channel's own character designs - fine for testing, "
               "don't publish them")
@@ -136,7 +188,7 @@ def main():
         faces |= {"shocked"} if any(b.get("target") == m["name"] for sc in script["scenes"] for b in sc["beats"]) else set()
         sprites[m["name"]] = cs.character(m, sorted(f for f in faces if f))
         # the thumbnail may also use expressive faces the sketch doesn't, but only ones already drawn
-        for f, p in cast_mod.Cast(seed=script["seed"]).character(m, render.THUMB_FACES).items():
+        for f, p in cast_mod.Cast(seed=script["seed"], art=args.art).character(m, render.THUMB_FACES).items():
             if p and cast_mod._variant_key(cast_mod.FACE_PROMPTS[f]) in Path(p).stem:
                 sprites[m["name"]].setdefault(f, p)
     burned = {b.get("target") for sc in script["scenes"] for b in sc["beats"] if b.get("event") == "hit"} | \
@@ -150,6 +202,9 @@ def main():
         if path is not None and not path.exists() and generate:
             scene_mod.generate(sc["background"], W_, H_, script["seed"] + si, cast_mod.mc)
         bg_paths[si] = path if path is not None and path.exists() else None
+    if args.art == "svg":
+        sprites = {k: {s: cast_mod.vector(p) if p else None for s, p in v.items()} for k, v in sprites.items()}
+        bg_paths = {k: cast_mod.vector(p, "photo") if p else None for k, p in bg_paths.items()}
     for name, states in sprites.items():
         missing = [s for s, p in states.items() if p is None]
         if missing:
@@ -169,7 +224,7 @@ def main():
     # ---- 5. sound
     tmp = folder / ("_tmp_preview" if args.preview else "_tmp")
     tmp.mkdir(parents=True, exist_ok=True)
-    wav = sound.mix(tmp / "audio.wav", plan["total"], dialogue, effects, args.music, script["seed"])
+    wav = sound.mix(tmp / "audio.wav", plan["total"], dialogue, effects, args.music, script["seed"], plan["scenes"])
 
     # ---- 6. render
     name = cast_mod.mc.slug(script["title"])[:60] + ("_preview" if args.preview else "")

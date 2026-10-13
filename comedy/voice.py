@@ -80,7 +80,8 @@ def llm_profiles(cast, llm):
     try:
         if not llm.available():
             return {}
-        listing = "\n".join(f"- {m['name']} ({m.get('who', m['name'])}, {m['gender']})" for m in cast)
+        listing = "\n".join(f"- {m['name']} ({m.get('who', m['name'])}, {m['gender']}"
+                            f"{', ' + m['personality'] if m.get('personality') else ''})" for m in cast)
         reply = llm.text_json(VOICE_PROMPT.format(listing=listing), temperature=0.4)
         llm.unload()
         out = {}
