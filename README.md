@@ -1,4 +1,4 @@
-# Local AI: images, video (ComfyUI) and coding LLM (Ollama + OpenCode in T3 Code)
+# Local AI: images, video (ComfyUI) and coding LLM (Ollama + OpenCode/Pi in T3 Code)
 
 Hardware: RTX 2060 Laptop (6 GB VRAM), 16 GB RAM, i7-10750H.
 
@@ -11,7 +11,7 @@ setup.bat          & rem Ollama, OpenCode, Pi, ComfyUI portable + GGUF node + re
 0-download-all.bat & rem all models (~100 GB, resumable)
 ```
 Not in git (installed by the scripts): `ComfyUI_windows_portable/` and all models.
-The OpenCode config template is `config/opencode.json`, the Pi ones `config/pi-models.json` + `config/pi-settings.json`.
+The OpenCode config template is `config/opencode.json`, the Pi ones `config/pi-models.json` + `config/pi-settings.json` + `config/pi-ollama-schema-fix.ts`.
 
 All models live in **one folder**: `MODELS_DIR` in `.env` (empty = `models\` in this folder; GUI: Settings > Model
 storage). ComfyUI's folders (`checkpoints\`, `diffusion_models\`, `text_encoders\`, `vae\` ...) sit directly in it,
@@ -59,8 +59,8 @@ GPU memory, so ComfyUI keeps its models loaded between runs.
 OpenCode 2 server API): an OpenAI-compatible API at http://127.0.0.1:8000/v1 (`OPENCODE_WRAP_URL`) in front of
 `opencode serve`. `common/llm.py` starts it when needed, it starts OpenCode 2 itself; `opencode-wrap.bat` runs it in a
 window, e.g. for other tools. `LLM_LOCAL_FALLBACK=1` falls back to the local Ollama model here too.
-- **OpenCode 2** is tagged upstream but not on npm yet (`opencode-ai` is 1.x, T3 Code's). `opencode-wrap\install-opencode2.bat`
-  (called by `setup.bat`) builds the latest `v2.x` tag with Bun into one native binary,
+- **OpenCode 2** is tagged upstream but not on npm yet (`opencode-ai` is 1.x). `opencode-wrap\install-opencode2.bat`
+  (called by `setup.bat`, also the OpenCode for T3 Code) builds the latest `v2.x` tag with Bun into one native binary,
   `%USERPROFILE%\.opencode2\bin\opencode.exe` (re-run to update; `OPENCODE_BIN` points elsewhere).
 - Zen's free tier only answers requests from inside OpenCode, so the wrapper uses throwaway sessions: plain prompts go
   through the session `generate` route (one model call, no agent loop, nothing executed, ~1-2 s); streamed requests and
@@ -344,10 +344,11 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   | gpt-oss:20b | ~13 GB | GPU + CPU, usable |
   | qwen3-coder:30b | ~19 GB | MoE, mostly CPU/RAM, slow, pushes RAM to the limit |
   | qwen3.8-blend:27b | ~12.6 GB | [JetBrains Qwen3.8/3.6 27B blend](https://huggingface.co/collections/JetBrains/qwen38-36-27b-blend), IQ3_S from `hf.co/JetBrains/Qwen3.8-3.6-27B-blend-GGUF:IQ3_S`. Dense 27B, strongest coder here but slowest (~1-3 tokens/s, mostly CPU). Q4_K_M (16.8 GB) does not fit in 16 GB RAM |
-- **OpenCode** (bun global install, package `opencode-ai`; winget's `SST.opencode` package lags
-  upstream and can't self-update), config: `%USERPROFILE%\.config\opencode\opencode.json`
-  (provider `ollama`, OpenAI-compatible endpoint `/v1`).
-- **T3 Code**: OpenCode provider enabled with binaryPath (`providerInstances.opencode`) in
+- **OpenCode 2** (v2.x, built from source by `opencode-wrap\install-opencode2.bat` into
+  `%USERPROFILE%\.opencode2\bin\opencode.exe`, see Vision AI; npm's `opencode-ai` is still 1.x), config:
+  `%USERPROFILE%\.config\opencode\opencode.json` (provider `ollama`, OpenAI-compatible endpoint `/v1`), same as 1.x.
+- **T3 Code** (nightly/preview >= 0.0.46, which recommends OpenCode >= 2.0.18): OpenCode provider enabled with
+  binaryPath `%USERPROFILE%\.opencode2\bin\opencode.exe` (`providerInstances.opencode`) in
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code, pick the model under the
   OpenCode provider: `opencode/muse-spark-1.3-contributor-free` (default) or `ollama/qwen3:8b` (or another one).
 - **Pi** ([pi coding agent](https://github.com/earendil-works/pi), bun global install, package
@@ -355,7 +356,13 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   (`ollama/qwen3.8-blend:27b`, thinking `low`). Config: `%USERPROFILE%\.pi\agent\models.json` (provider `ollama`,
   OpenAI-compatible `/v1`, 32K context like `OLLAMA_CONTEXT_LENGTH`) and `settings.json`; templates in `config\pi-*.json`.
   `3-coding-llm-t3code.bat qwen3.8-blend:27b pi` starts Ollama, preloads the model and opens Pi; or just `pi` in any
-  project folder (`/model` switches, e.g. to `ollama/qwen3:8b`). T3 Code has no Pi provider, so Pi stays in the terminal.
+  project folder (`/model` switches, e.g. to `ollama/qwen3:8b`).
+  **Pi in T3 Code** needs a T3 Code nightly/preview (>= 0.0.46): `providerInstances.pi` in T3's `settings.json`
+  (`enabled: true`, `binaryPath` `%USERPROFILE%\.bun\bin\pi.exe`, or *Settings > Providers > Pi*). T3 lists the
+  models from `models.json`; `3-coding-llm-t3code.bat qwen3.8-blend:27b` preloads the model, then pick provider Pi.
+  T3 adds its MCP tools to Pi, and Ollama's llama.cpp engine rejects object schemas without `properties` (500
+  "properties must be an object", e.g. with the 27B blend). `setup.bat` installs `config\pi-ollama-schema-fix.ts`
+  as a Pi extension (`%USERPROFILE%\.pi\agent\extensions\`) that adds them.
   The 27B blend is slow here: a small file edit took ~3-6 min including model load.
 - **Ollama >= 0.40 model location**: the tray app passes its own *Settings > Model location* to the server and ignores
   `OLLAMA_MODELS`. If `ollama list` is empty after an update, set it there to `<MODELS_DIR>\ollama` (e.g.

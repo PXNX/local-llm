@@ -1,10 +1,11 @@
 @echo off
-rem Flow 3: coding LLM in T3 Code (OpenCode provider).
+rem Flow 3: coding LLM in T3 Code (OpenCode or Pi provider).
 rem   Default: free OpenCode Zen cloud model opencode/muse-spark-1.3-contributor-free (no key, no GPU memory)
 rem   Other Zen model:    3-coding-llm-t3code.bat opencode/mimo-v2.6-flash-free
 rem   Local Ollama model: 3-coding-llm-t3code.bat qwen3:8b     (or gpt-oss:20b, qwen3-coder:30b, qwen3.8-blend:27b)
 rem   Terminal instead of T3 Code:  3-coding-llm-t3code.bat qwen3:8b cli
 rem   Pi coding agent (terminal):   3-coding-llm-t3code.bat qwen3.8-blend:27b pi   (local models in config\pi-models.json)
+rem   Pi in T3 Code: 3-coding-llm-t3code.bat qwen3.8-blend:27b, then provider Pi in the model picker
 setlocal
 call "%~dp0common\models-env.bat"
 set "MODEL=%~1"
@@ -44,11 +45,11 @@ if /i "%~2"=="pi" (
   exit /b 0
 )
 if /i "%~2"=="cli" (
-  "%USERPROFILE%\.bun\bin\opencode.exe" -m %FULL%
+  "%USERPROFILE%\.opencode2\bin\opencode.exe" -m %FULL%
   exit /b 0
 )
 
 start "" "%LOCALAPPDATA%\Programs\t3code\T3 Code (Alpha).exe"
 echo.
-echo T3 Code is opening: in the model picker choose provider OpenCode, then %FULL%.
+echo T3 Code is opening: in the model picker choose provider OpenCode or Pi, then %FULL%.
 timeout /t 8 >nul
