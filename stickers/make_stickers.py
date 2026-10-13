@@ -13,7 +13,7 @@ Usage (via 2-stickers.bat, which uses ComfyUI's embedded Python):
                            [--engine sdxl] [--strength 0.55] [--no-stylize] [--seed 42]
 
 Stylize engines (--engine):
-  flux1         FLUX.1 [schnell] text-to-image from the vision model's look description (default). Needs
+  flux1         FLUX.1 [schnell] text-to-image from the vision model's look description. Needs
                 models/diffusion_models/flux1-schnell-Q4_K_S.gguf, models/text_encoders/clip_l.safetensors
                 and t5-v1_1-xxl-encoder-Q5_K_M.gguf, models/vae/ae.safetensors. SDXL is broken on this
                 ComfyUI build (gray-square bug, upstream issue), FLUX.1 works instead.
@@ -28,7 +28,7 @@ Stylize engines (--engine):
                 models/text_encoders/flux2_klein_qwen3_text_encoder.safetensors and
                 models/vae/flux2_vae.safetensors. Large model, slow without a lot of VRAM.
   iris3b        Iris-3B pixel-space text-to-image (speridlabs/iris-3b), GGUF-quantized, no reference-image
-                conditioning. Needs the unofficial ComfyUI-Iris-3B custom node (github.com/RealRebelAI/ComfyUI-Iris-3B,
+                conditioning (default). Needs the unofficial ComfyUI-Iris-3B custom node (github.com/RealRebelAI/ComfyUI-Iris-3B,
                 setup.bat clones it + runs its install_iris_source.py) plus the GGUF checkpoint at
                 models/checkpoints/Iris-3B/Iris-3B-Q4_K_S.gguf (0-download-all.bat grabs it from
                 huggingface.co/realrebelai/iris-3b_GGUFs; Q3/Q5/Q6 variants are alternatives, smaller/faster
@@ -358,7 +358,7 @@ def main():
     ap.add_argument("--no-text", action="store_true", help="no text on any sticker, just the stylized image")
     ap.add_argument("--with-text", action="store_true",
                     help="let the vision model add a short text (the default here; 2-stickers.bat passes --no-text without it)")
-    ap.add_argument("--engine", choices=list(ENGINES), default="flux1", help="stylize engine, see above (default flux1)")
+    ap.add_argument("--engine", choices=list(ENGINES), default="iris3b", help="stylize engine, see above (default iris3b)")
     ap.add_argument("--strength", type=float, default=0.55, help="img2img denoise 0.3 (close to photo) .. 0.8 (free); sdxl/photomaker only")
     ap.add_argument("--no-stylize", action="store_true", help="skip ComfyUI, only cut out the original")
     ap.add_argument("--seed", type=int, default=None)
