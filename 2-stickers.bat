@@ -7,10 +7,10 @@ rem     2-stickers.bat photo.jpg --with-text --lang German   (the vision model a
 rem     2-stickers.bat photo.jpg --text "Monday mood" --no-stylize
 rem   By default the stickers have no text, just the character acting out each reaction.
 rem   Animate the results for Telegram afterwards with 11-animate-stickers.bat.
-rem   Default engine is flux1 (FLUX.1 schnell draws the photographed animal/person as a near-
-rem   photorealistic sticker acting out each reaction; one look + text style per batch) - SDXL is broken on this ComfyUI build (gray-square
-rem   bug, see stickers\make_stickers.py). --engine photomaker needs models\photomaker\photomaker-v2.bin
-rem   and only works once SDXL is fixed.
+rem   Default engine is iris3b (Iris-3B GGUF text-to-image from the vision model's look description;
+rem   one look + text style per batch, experimental - see stickers\make_stickers.py). --engine flux1
+rem   is the older, more tested alternative. SDXL is broken on this ComfyUI build (gray-square bug).
+rem   --engine photomaker needs models\photomaker\photomaker-v2.bin and only works once SDXL is fixed.
 setlocal
 cd /d "%~dp0"
 call "%~dp0common\models-env.bat"

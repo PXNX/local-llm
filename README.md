@@ -96,7 +96,7 @@ window, e.g. for other tools. `LLM_LOCAL_FALLBACK=1` falls back to the local Oll
 - `--with-text` the vision model adds a short reaction text ("Hi there!", "Nope" ...); without it the
   bat passes `--no-text` (the Python script itself still writes text unless `--no-text` is given)
 - `--text "My text"` your own caption (repeatable, one per sticker), skips the LLM for text
-- `--engine flux1` stylize engine, see below, default `flux1`
+- `--engine flux1` stylize engine, see below, default `iris3b`
 - `--strength 0.4` closer to the original (0.3) ... freer cartoon (0.8), default 0.55 (`sdxl`/`photomaker` only)
 - `--no-stylize` no ComfyUI, only cut out the original (works without the driver update)
 
@@ -127,12 +127,12 @@ reads as one sticker pack. Output: 512x512 WebP < 100 KB (WhatsApp/Telegram), on
 Stylize engines (`stickers/sticker_workflow_*_api.json`, can also be dragged into ComfyUI):
 | engine | needs | notes |
 | --- | --- | --- |
-| `flux1` (default) | `flux1-schnell-Q4_K_S.gguf` + `clip_l.safetensors` + `t5-v1_1-xxl-encoder-Q5_K_M.gguf` + `ae.safetensors` (all already downloaded) | FLUX.1 schnell text-to-image from the vision model's look description, GGUF-quantized, fits the RTX 2060's 6 GB VRAM - SDXL is broken on this ComfyUI build (see Known issue below), FLUX.1 works |
+| `flux1` | `flux1-schnell-Q4_K_S.gguf` + `clip_l.safetensors` + `t5-v1_1-xxl-encoder-Q5_K_M.gguf` + `ae.safetensors` (all already downloaded) | FLUX.1 schnell text-to-image from the vision model's look description, GGUF-quantized, fits the RTX 2060's 6 GB VRAM - SDXL is broken on this ComfyUI build (see Known issue below), FLUX.1 works |
 | `sdxl` | `DreamShaperXL_Turbo_v2_1.safetensors` (already downloaded) | Fast SDXL img2img, but currently broken - flat gray output, see Known issue below |
 | `photomaker` | same checkpoint + `models/photomaker/photomaker-v2.bin` (`0-download-all.bat` grabs it) | SDXL + PhotoMaker face-identity conditioning - best resemblance for the VRAM it costs, once SDXL is fixed |
 | `qwen-image21` | `models/diffusion_models/qwen-image-2.1-UC-fp8.safetensors` (downloaded) + a Qwen3-VL-8B text encoder + the Qwen-Image 2.1 VAE (not downloaded yet, several more GB) | Native reference-image editing, best quality ceiling, but slow on 6 GB VRAM |
 | `flux2-klein` | `models/diffusion_models/flux2-klein-base-9b-fp8.safetensors` + `models/vae/flux2_vae.safetensors` (downloaded) + a Flux.2 Klein Qwen3 text encoder (not downloaded yet) | FLUX.2's distilled edit model, also slow on 6 GB VRAM |
-| `iris3b` | `models/checkpoints/Iris-3B/Iris-3B-Q4_K_S.gguf` (downloaded) + the unofficial `ComfyUI-Iris-3B` custom node (`setup.bat` clones it) | Iris-3B pixel-space text-to-image, GGUF-quantized, no reference-image conditioning. The Qwen3-VL-4B-Instruct text encoder downloads itself via `transformers` on first use. Fits the 2060's 6 GB (unlike the un-quantized fp32 weights) since the whole quantized model is only ~1.7 GB, but neither it nor the text encoder use ComfyUI's VRAM/CPU streaming - full load, not partial. Unofficial, days old, experimental |
+| `iris3b` (default) | `models/checkpoints/Iris-3B/Iris-3B-Q4_K_S.gguf` (downloaded) + the unofficial `ComfyUI-Iris-3B` custom node (`setup.bat` clones it) | Iris-3B pixel-space text-to-image, GGUF-quantized, no reference-image conditioning. The Qwen3-VL-4B-Instruct text encoder downloads itself via `transformers` on first use. Fits the 2060's 6 GB (unlike the un-quantized fp32 weights) since the whole quantized model is only ~1.7 GB, but neither it nor the text encoder use ComfyUI's VRAM/CPU streaming - full load, not partial. Unofficial, days old, experimental |
 
 `qwen-image21` and `flux2-klein` are wired up but need the missing text-encoder (and for
 `qwen-image21`, VAE) files placed by hand before they'll run - see the `--engine` help in
