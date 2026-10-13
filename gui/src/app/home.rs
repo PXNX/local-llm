@@ -112,6 +112,16 @@ impl App {
             if row(ui, missing.is_empty(), false, "Models", models_text, Some("Download all")) {
                 action = Some(3);
             }
+            let stray: u64 = r.models.move_plan().iter().map(|m| m.size).sum();
+            let folder = self.models_dir();
+            let folder_text = if stray == 0 {
+                format!("every model is in {}", folder.display())
+            } else {
+                format!("{} still elsewhere - move it into {}", sys::human(stray), folder.display())
+            };
+            if row(ui, stray == 0, false, "One models folder", folder_text, Some("Move")) {
+                action = Some(5);
+            }
             if row(
                 ui,
                 telegram_ok,
@@ -127,6 +137,7 @@ impl App {
             Some(0) => self.run_setup_bat(),
             Some(1) => sys::open_url("https://www.nvidia.com/en-us/drivers/"),
             Some(2) | Some(4) => self.select(Page::Settings),
+            Some(5) => self.select(Page::Models),
             Some(3) => {
                 if let Some(r) = &self.repo {
                     for m in &missing {
