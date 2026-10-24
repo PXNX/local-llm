@@ -3,6 +3,7 @@
 mod app;
 mod coding;
 mod config;
+mod console;
 mod envfile;
 mod flows;
 mod fonts;
@@ -10,11 +11,13 @@ mod health;
 mod highlight;
 mod icons;
 mod jobs;
+mod llamacpp;
 mod models;
 mod paths;
 mod servers;
 mod sys;
 mod taskbar;
+mod tray;
 mod ui;
 
 use eframe::egui;

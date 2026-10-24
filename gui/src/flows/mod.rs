@@ -24,6 +24,8 @@ pub enum Provider {
     Ollama,
     /// OpenCode Zen free models through opencode-wrap (no key, needs OpenCode 2)
     OpenCode,
+    /// The llama.cpp router the GUI starts on the Coding page (`llama serve`, one GGUF)
+    LlamaCpp,
 }
 
 impl Provider {
@@ -32,6 +34,7 @@ impl Provider {
             "ollama" => Provider::Ollama,
             "openrouter" => Provider::OpenRouter,
             "opencode" => Provider::OpenCode,
+            "llamacpp" | "llama-cpp" | "llama.cpp" => Provider::LlamaCpp,
             _ if has_key => Provider::OpenRouter,
             _ => Provider::Ollama,
         }
@@ -42,6 +45,16 @@ impl Provider {
             Provider::OpenRouter => "openrouter",
             Provider::Ollama => "ollama",
             Provider::OpenCode => "opencode",
+            Provider::LlamaCpp => "llamacpp",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Provider::OpenRouter => "OpenRouter",
+            Provider::Ollama => "Ollama",
+            Provider::OpenCode => "OpenCode Zen",
+            Provider::LlamaCpp => "llama.cpp",
         }
     }
 }
@@ -72,6 +85,7 @@ impl Needs {
         match llm.provider {
             Provider::OpenRouter => self.env.push("OPENROUTER_API_KEY"),
             Provider::OpenCode => {}
+            Provider::LlamaCpp => {}
             Provider::Ollama => {
                 self.models.push(ollama_id(&llm.ollama_model));
                 self.servers.push(Server::Ollama);

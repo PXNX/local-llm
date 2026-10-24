@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Color32, RichText};
 
 use crate::config::{Config, Page};
+use crate::console;
 use crate::envfile::EnvFile;
 use crate::flows::{FlowId, Llm, Needs, Provider};
 use crate::health::Health;
@@ -25,6 +26,7 @@ use crate::paths::{self, Paths};
 use crate::servers::{self, Server, Servers};
 use crate::taskbar::sound::{self, Cue};
 use crate::taskbar::{Progress, Taskbar};
+use crate::tray::Tray;
 use crate::ui::{self, AMBER, GREEN, RED};
 
 /// Repo-bound state, created once the local-llm folder is known.
@@ -48,7 +50,11 @@ pub struct App {
     /// The queue is on hold: waiting runs don't start by themselves until Start is pressed.
     held: bool,
     taskbar: Taskbar,
+    /// Notification-area icon: open, unload/stop the llama.cpp router, quit.
+    tray: Tray,
     coding: coding_page::Shared,
+    /// Command lines and output of the router, Ollama and the editors (Coding page).
+    console: console::Shared,
     /// The run whose log is shown on the Queue page (its job's address).
     queue_open: Option<usize>,
     /// Preset name typed on each flow's page.
@@ -100,7 +106,9 @@ impl App {
             queue: VecDeque::new(),
             held: false,
             taskbar: Taskbar::new(cc),
+            tray: Tray::new(cc.egui_ctx.clone()),
             coding: Default::default(),
+            console: Default::default(),
             queue_open: None,
             preset_name: HashMap::new(),
             launched: Default::default(),
@@ -118,6 +126,8 @@ impl App {
             ollama_was_up: false,
             cfg,
         };
+        console::init(cc.egui_ctx.clone());
+        console::tail(app.console.clone(), servers::ollama_log(), "ollama");
         if let Some(root) = paths::find_repo(app.cfg.repo.as_deref()) {
             app.open_repo(root);
         }
@@ -318,6 +328,7 @@ impl App {
             self.configure_models();
         }
         self.save_config();
+        self.poll_llama_router();
     }
 
     /// Blends a finished run's step durations into the flow's saved history (exponential moving
@@ -400,7 +411,10 @@ impl App {
                     (icons::CLOUD_OUTLINE, or_default(&r.env.get("OPENROUTER_MODEL"), "qwen/qwen3.8-27b:free"))
                 }
                 (Provider::OpenCode, Some(r)) => {
-                    (icons::CLOUD_OUTLINE, or_default(&r.env.get("OPENCODE_MODEL"), "opencode/muse-spark-1.3-contributor-free"))
+                    (icons::CLOUD_OUTLINE, or_default(&r.env.get("OPENCODE_MODEL"), "opencode/deepseek-v4.1-flash-free"))
+                }
+                (Provider::LlamaCpp, Some(r)) => {
+                    (icons::DESKTOP_TOWER, crate::llamacpp::model_id(&r.env.get(crate::llamacpp::MODEL_KEY)))
                 }
                 _ => (icons::DESKTOP_TOWER, llm.ollama_model.clone()),
             };
@@ -581,6 +595,8 @@ impl eframe::App for App {
         self.tick();
         self.pump_queue();
         self.taskbar.set(self.taskbar_progress());
+        self.tray.set_tip(self.llama_tip());
+        self.tray.set_router(&self.llama_config().0);
 
         if ui.ctx().input(|i| i.viewport().close_requested()) && !self.allow_close {
             if self.running.is_some() || !self.queue.is_empty() {

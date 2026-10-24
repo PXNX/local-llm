@@ -58,6 +58,9 @@ pub struct OllamaModel {
     pub group: String,
     pub used_by: String,
     pub size: Option<u64>,
+    /// Recommended on the Coding page even before it is downloaded.
+    #[serde(default)]
+    pub suggested: bool,
 }
 
 /// A model file that is neither a ComfyUI weight nor an Ollama model - e.g. the comedy flow's
@@ -777,7 +780,7 @@ mod tests {
         let mut c = model("tiny.gguf", Some("https://x/tiny.gguf"), Some(5));
         c.sha256 = Some(sha.into());
         m.comfy = Arc::new(vec![c]);
-        m.ollama = Arc::new(vec![OllamaModel { model: "tiny:1b".into(), group: String::new(), used_by: String::new(), size: Some(5) }]);
+        m.ollama = Arc::new(vec![OllamaModel { model: "tiny:1b".into(), group: String::new(), used_by: String::new(), size: Some(5), suggested: false }]);
         let roots = vec![comfy.clone()];
 
         let (st, _) = m.scan(&roots, &ollama, &comfy, Vec::new());

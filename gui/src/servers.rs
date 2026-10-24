@@ -185,3 +185,8 @@ pub fn stop_ollama() {
 pub fn ollama_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default().join("Programs").join("Ollama")
 }
+
+/// Where the Ollama server writes what it prints (`%LOCALAPPDATA%\Ollama\server.log`).
+pub fn ollama_log() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default().join("Ollama").join("server.log")
+}

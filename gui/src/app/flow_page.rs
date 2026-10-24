@@ -364,10 +364,15 @@ pub(super) fn run_actions(ui: &mut egui::Ui, h: &JobHandle) {
 /// Virtualized: only the visible rows are laid out, so long logs stay cheap.
 pub(super) fn log_view(ui: &mut egui::Ui, h: &JobHandle) {
     let j = h.job.lock().unwrap();
+    log_lines(ui, &j.lines);
+}
+
+/// The log view for any list of lines (a flow's job or the Coding page console).
+pub(super) fn log_lines(ui: &mut egui::Ui, lines: &std::collections::VecDeque<Line>) {
     let row = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
     egui::Frame::NONE.fill(ui.visuals().extreme_bg_color).inner_margin(6.0).corner_radius(4.0).show(ui, |ui| {
-        egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show_rows(ui, row, j.lines.len(), |ui, range| {
-            for line in j.lines.range(range) {
+        egui::ScrollArea::both().auto_shrink([false, false]).stick_to_bottom(true).show_rows(ui, row, lines.len(), |ui, range| {
+            for line in lines.range(range) {
                 log_line(ui, line);
             }
         });

@@ -74,10 +74,12 @@
   ],
   "ollama": [
     { "model": "qwen3-vl:4b", "group": "Vision (LLM_PROVIDER=ollama)", "used_by": "Stickers, Top 5, Caricatures, Image to video", "size": 3295636135 },
-    { "model": "qwen3:8b", "group": "Coding (3-coding-llm-t3code.bat)", "used_by": "T3 Code / OpenCode", "size": 5225388164 },
-    { "model": "gpt-oss:20b", "group": "Coding (3-coding-llm-t3code.bat)", "used_by": "T3 Code / OpenCode", "size": 13800000000 },
-    { "model": "qwen3-coder:30b", "group": "Coding (3-coding-llm-t3code.bat)", "used_by": "T3 Code / OpenCode", "size": 18600000000 },
-    { "model": "hf.co/JetBrains/Qwen3.8-3.6-27B-blend-GGUF:IQ3_S", "group": "Coding (3-coding-llm-t3code.bat)", "used_by": "T3 Code / OpenCode", "size": 13533766221 }
+    { "model": "qwen3:8b", "group": "Coding (T3 Code, OpenCode, Pi)", "used_by": "T3 Code / OpenCode / Pi", "size": 5225388164 },
+    { "model": "qwen3.5:9b", "group": "Coding (T3 Code, OpenCode, Pi)", "used_by": "T3 Code / OpenCode / Pi", "size": 7600000000, "suggested": true },
+    { "model": "nemotron-3.5-bolt:e4b-q4_K_M", "group": "Coding (T3 Code, OpenCode, Pi)", "used_by": "T3 Code / OpenCode / Pi", "size": 7900000000, "suggested": true },
+    { "model": "gpt-oss:20b", "group": "Coding (T3 Code, OpenCode, Pi)", "used_by": "T3 Code / OpenCode / Pi", "size": 13800000000 },
+    { "model": "qwen3-coder:30b", "group": "Coding (T3 Code, OpenCode, Pi)", "used_by": "T3 Code / OpenCode / Pi", "size": 18600000000 },
+    { "model": "hf.co/JetBrains/Qwen3.8-3.6-27B-blend-GGUF:IQ3_S", "group": "Coding (T3 Code, OpenCode, Pi)", "used_by": "T3 Code / OpenCode / Pi", "size": 13533766221 }
   ],
   "local": [
     { "id": "kokoro-onnx", "group": "Kokoro-82M (comedy voices)", "used_by": "Comedy",

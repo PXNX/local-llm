@@ -1,15 +1,18 @@
 """Vision-LLM calls shared by all flows: OpenRouter (free cloud models), OpenCode Zen (free cloud
-models via opencode-wrap, no key) or a local Ollama model.
+models via opencode-wrap, no key), the llama.cpp router the GUI starts (Coding page) or a local
+Ollama model.
 
 Configured in the repo's .env (real environment variables win):
-  LLM_PROVIDER        openrouter (default when OPENROUTER_API_KEY is set), opencode or ollama
+  LLM_PROVIDER        openrouter (default when OPENROUTER_API_KEY is set), opencode, llamacpp or ollama
   OPENROUTER_API_KEY  https://openrouter.ai/keys
   OPENROUTER_MODEL    a vision-capable model, default qwen/qwen3.8-27b:free
   OPENROUTER_FALLBACKS up to 3 more models (comma separated), tried in order when one fails
   LLM_LOCAL_FALLBACK  1 (default): use the local Ollama model when all OpenRouter models fail
-  OPENCODE_MODEL      Zen model for LLM_PROVIDER=opencode, default opencode/muse-spark-1.3-contributor-free
+  OPENCODE_MODEL      Zen model for LLM_PROVIDER=opencode, default opencode/deepseek-v4.1-flash-free
   OPENCODE_WRAP_URL   opencode-wrap (opencode-wrap/server.ts, started with bun when down), default http://127.0.0.1:8000/v1
-  LLM_LOCAL_FALLBACK  also applies to opencode: local Ollama model when the Zen model fails
+  LLM_LOCAL_FALLBACK  also applies to opencode and llamacpp: local Ollama model when that model fails
+  LLAMA_CPP_URL       llama.cpp router base URL, default http://127.0.0.1:8080 (started by the GUI)
+  LLAMA_CPP_MODEL     model the router loads, default nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M
   OLLAMA_MODEL        local vision model, default qwen3-vl:4b
   LLM_LOCAL_PROFILE   speed (default) or quality - the GUI's toggle: which local model answers text-only
                       prompts when OLLAMA_TEXT_MODEL isn't set (LLM_CODING_SPEED_MODEL, default qwen3:8b, or
@@ -36,7 +39,9 @@ OLLAMA_URL = "http://127.0.0.1:11434"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENROUTER_MODEL = "qwen/qwen3.8-27b:free"
 DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b"
-DEFAULT_OPENCODE_MODEL = "opencode/muse-spark-1.3-contributor-free"
+DEFAULT_OPENCODE_MODEL = "opencode/deepseek-v4.1-flash-free"
+DEFAULT_LLAMACPP_URL = "http://127.0.0.1:8080"
+DEFAULT_LLAMACPP_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M"
 DEFAULT_WRAP_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_OLLAMA_TEXT_MODEL = "qwen3:8b"
 DEFAULT_QUALITY_TEXT_MODEL = "qwen3.8-blend:27b"
@@ -53,7 +58,7 @@ def load_env(path=ENV_FILE):
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 env[k.strip()] = v.strip().strip("'\"")
-    env.update({k: v for k, v in os.environ.items() if k in env or k.startswith(("TELEGRAM_", "OPENROUTER_", "OPENCODE_", "LLM_", "OLLAMA_"))})
+    env.update({k: v for k, v in os.environ.items() if k in env or k.startswith(("TELEGRAM_", "OPENROUTER_", "OPENCODE_", "LLM_", "OLLAMA_", "LLAMA_CPP_"))})
     return env
 
 
@@ -62,9 +67,15 @@ _ENV = load_env()
 
 def provider():
     p = _ENV.get("LLM_PROVIDER", "").strip().lower()
+    if p in ("llamacpp", "llama-cpp", "llama.cpp"):
+        return "llamacpp"
     if p in ("openrouter", "opencode", "ollama"):
         return p
     return "openrouter" if _ENV.get("OPENROUTER_API_KEY") else "ollama"
+
+
+def provider_name():
+    return {"opencode": "OpenCode Zen", "llamacpp": "llama.cpp"}.get(provider(), provider())
 
 
 def model():
@@ -72,6 +83,8 @@ def model():
         return _ENV.get("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL
     if provider() == "opencode":
         return _ENV.get("OPENCODE_MODEL") or DEFAULT_OPENCODE_MODEL
+    if provider() == "llamacpp":
+        return _ENV.get("LLAMA_CPP_MODEL") or DEFAULT_LLAMACPP_MODEL
     return ollama_model()
 
 
@@ -134,7 +147,7 @@ def _start_wrap():
 
 
 def label():
-    return f"{model()} via {provider()}"
+    return f"{model()} via {provider_name()}"
 
 
 def ollama_text_model():
@@ -147,12 +160,27 @@ def ollama_text_model():
 
 
 def text_label():
-    local = ollama_text_model()
-    return f"{local} via ollama" if is_local() else label()
+    if provider() == "ollama":
+        return f"{ollama_text_model()} via ollama"
+    return label()
 
 
 def is_local():
     return provider() == "ollama"
+
+
+def llamacpp_base():
+    """The router's OpenAI-compatible base URL (`/v1` appended unless the setting has it)."""
+    url = (_ENV.get("LLAMA_CPP_URL") or DEFAULT_LLAMACPP_URL).strip().rstrip("/")
+    return url if url.endswith("/v1") else f"{url}/v1"
+
+
+def _llamacpp_up():
+    try:
+        urllib.request.urlopen(f"{llamacpp_base()}/models", timeout=3)
+        return True
+    except Exception:
+        return False
 
 
 def available():
@@ -162,14 +190,21 @@ def available():
         return False
     if provider() == "opencode":
         return _start_wrap() or (local_fallback() and _ollama_up())
+    if provider() == "llamacpp":
+        return _llamacpp_up() or (local_fallback() and _ollama_up())
     return _ollama_up()
 
 
 def unload():
-    """Free the local model's VRAM (no-op for OpenRouter)."""
-    if is_local():
+    """Free the local model's VRAM (no-op for the cloud providers)."""
+    if provider() == "ollama":
         try:
             _post(f"{OLLAMA_URL}/api/generate", {"model": ollama_model(), "keep_alive": 0}, timeout=30)
+        except Exception:
+            pass
+    elif provider() == "llamacpp":
+        try:
+            _post(f"{llamacpp_base().removesuffix('/v1')}/models/unload", {"model": model()}, timeout=30)
         except Exception:
             pass
 
@@ -205,6 +240,14 @@ def text_json(prompt, temperature=0.8, keep_alive=0, ollama_options=None):
 
 
 def _ask(prompt, b64, temperature, keep_alive, ollama_options):
+    if provider() == "llamacpp":
+        try:
+            return _llamacpp(prompt, b64, temperature)
+        except Exception as e:
+            if local_fallback() and _ollama_up():
+                print(f"[llm  ] WARNING: {model()} failed ({_short(e)}), using the local model {ollama_model()}")
+                return _ollama(prompt, b64, temperature, keep_alive, ollama_options)
+            raise RuntimeError(f"llama.cpp ({model()}): {e}") from None
     if provider() == "opencode":
         try:
             if not _start_wrap():
@@ -257,6 +300,36 @@ def _ollama(prompt, b64, temperature, keep_alive, ollama_options):
         payload.pop("think")  # model without thinking support
         res = _post(f"{OLLAMA_URL}/api/chat", payload)
     return _parse_json(res["message"]["content"])
+
+
+def _llamacpp(prompt, b64, temperature):
+    """The router's OpenAI-compatible chat endpoint (llama serve). Text-only prompts send a plain
+    string, images go as an OpenAI content list - a text-only GGUF rejects them, then Ollama falls back."""
+    if b64:
+        content = [{"type": "text", "text": prompt},
+                   {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]
+    else:
+        content = prompt
+    payload = {
+        "model": model(),
+        "messages": [{"role": "user", "content": content}],
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+    }
+    url = f"{llamacpp_base()}/chat/completions"
+    try:
+        res = _post(url, payload, timeout=600)
+    except urllib.error.HTTPError as e:
+        if e.code != 400:
+            raise RuntimeError(f"llama.cpp {e.code}: {_http_error(e)}") from None
+        payload.pop("response_format")  # the router may not implement JSON mode, the prompt asks for JSON
+        try:
+            res = _post(url, payload, timeout=600)
+        except urllib.error.HTTPError as again:
+            raise RuntimeError(f"llama.cpp {again.code}: {_http_error(again)}") from None
+    if "error" in res:
+        raise RuntimeError(f"llama.cpp: {_error_text(res['error'])}")
+    return _parse_json(res["choices"][0]["message"].get("content"))
 
 
 def _openrouter(name, prompt, b64, temperature):

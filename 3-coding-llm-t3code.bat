@@ -1,6 +1,6 @@
 @echo off
 rem Flow 3: coding LLM in T3 Code (OpenCode or Pi provider).
-rem   Default: free OpenCode Zen cloud model opencode/muse-spark-1.3-contributor-free (no key, no GPU memory)
+rem   Default: free OpenCode Zen cloud model opencode/deepseek-v4.1-flash-free (no key, no GPU memory)
 rem   Other Zen model:    3-coding-llm-t3code.bat opencode/mimo-v2.6-flash-free
 rem   Local Ollama model: 3-coding-llm-t3code.bat qwen3:8b     (or gpt-oss:20b, qwen3-coder:30b, qwen3.8-blend:27b)
 rem   Tuned local model:  3-coding-llm-t3code.bat speed|quality   (local-coder:speed = qwen3:8b, 16k, no thinking;
@@ -11,7 +11,7 @@ rem   Pi in T3 Code: 3-coding-llm-t3code.bat qwen3.8-blend:27b, then provider Pi
 setlocal
 call "%~dp0common\models-env.bat"
 set "MODEL=%~1"
-if "%MODEL%"=="" set "MODEL=opencode/muse-spark-1.3-contributor-free"
+if "%MODEL%"=="" set "MODEL=opencode/deepseek-v4.1-flash-free"
 set "OLLAMA=%LOCALAPPDATA%\Programs\Ollama"
 
 rem Zen models run in the cloud: nothing to start or load

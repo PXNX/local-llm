@@ -1,5 +1,5 @@
 {
-  "defaultProvider": "ollama",
-  "defaultModel": "qwen3.8-blend:27b",
+  "defaultProvider": "llama-cpp",
+  "defaultModel": "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M",
   "defaultThinkingLevel": "low"
 }

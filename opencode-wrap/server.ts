@@ -23,7 +23,7 @@ const OPENCODE_BASE = env("OPENCODE_BASE", `http://127.0.0.1:${OPENCODE_PORT}`).
 // has a different server API
 const OPENCODE2 = `${process.env.USERPROFILE || process.env.HOME}/.opencode2/bin/opencode${process.platform === "win32" ? ".exe" : ""}`
 const OPENCODE_BIN = env("OPENCODE_BIN", (await Bun.file(OPENCODE2).exists()) ? OPENCODE2 : "opencode")
-const DEFAULT_MODEL = env("WRAP_MODEL", "muse-spark-1.3-contributor-free")
+const DEFAULT_MODEL = env("WRAP_MODEL", "deepseek-v4.1-flash-free")
 const DEFAULT_PROVIDER = env("WRAP_PROVIDER", "opencode")
 // cwd of the spawned serve: an empty folder, OpenCode's own tools (if a model uses them) run there
 const WRAP_CWD = env("WRAP_CWD", `${process.env.TEMP || process.env.TMPDIR || "/tmp"}/opencode-wrap`).replaceAll("\\", "/")
