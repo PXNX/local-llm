@@ -1,5 +1,21 @@
 {
   "providers": {
+    "llama-cpp": {
+      "baseUrl": "http://localhost:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "none",
+      "models": [
+        {
+          "id": "byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S"
+        },
+        {
+          "id": "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M",
+          "name": "Nemotron 3.5 Bolt E4B (Q4_K_M)",
+          "contextWindow": 57344,
+          "maxTokens": 8192
+        }
+      ]
+    },
     "ollama": {
       "name": "Ollama (local)",
       "baseUrl": "http://localhost:11434/v1",

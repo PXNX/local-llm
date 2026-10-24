@@ -111,10 +111,11 @@ impl App {
         Self::section(ui, icons::ROBOT, "Vision AI (captions, clip ratings, motion prompts)");
         let llm = self.llm();
         let mut provider = llm.provider;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.radio_value(&mut provider, Provider::OpenRouter, "OpenRouter - free cloud models, no GPU memory used");
             ui.radio_value(&mut provider, Provider::OpenCode, "OpenCode Zen - free cloud models, no key");
             ui.radio_value(&mut provider, Provider::Ollama, "Ollama - local and offline");
+            ui.radio_value(&mut provider, Provider::LlamaCpp, "llama.cpp - the GGUF router from the Coding page");
         });
         if provider != llm.provider {
             self.save_env(&[("LLM_PROVIDER", provider.env_value().into())]);
@@ -143,7 +144,7 @@ impl App {
                     ui,
                     "OPENCODE_MODEL",
                     "Model",
-                    "opencode/muse-spark-1.3-contributor-free",
+                    "opencode/deepseek-v4.1-flash-free",
                     "a free OpenCode Zen model (e.g. opencode/mimo-v2.6-flash-free) - served by opencode-wrap, started when needed",
                 );
                 self.text_field(
@@ -152,6 +153,29 @@ impl App {
                     "Then local Ollama",
                     "1",
                     "1 = use the local Ollama model when the Zen model fails, 0 = give up",
+                );
+            }
+            if provider == Provider::LlamaCpp {
+                self.text_field(
+                    ui,
+                    "LLAMA_CPP_MODEL",
+                    "Model",
+                    "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M",
+                    "the GGUF the router loads - Start router on the Coding page loads it and frees it again after a run",
+                );
+                self.text_field(
+                    ui,
+                    "LLAMA_CPP_URL",
+                    "Router URL",
+                    "http://127.0.0.1:8080",
+                    "llama serve endpoint; the Coding page starts it hidden in the background",
+                );
+                self.text_field(
+                    ui,
+                    "LLM_LOCAL_FALLBACK",
+                    "Then local Ollama",
+                    "1",
+                    "1 = use the local Ollama model when the router is not running or the model fails, 0 = give up",
                 );
             }
             self.text_field(ui, "OLLAMA_MODEL", "Ollama model", "qwen3-vl:4b", "local vision model (downloaded under Models)");

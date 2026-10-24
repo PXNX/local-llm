@@ -81,9 +81,10 @@ impl Profile {
 }
 
 /// Builds (or rebuilds) the profile's variant from `base` and points OpenCode and Pi at it.
-pub fn apply(profile: Profile, base: &str) -> Result<String, String> {
+pub fn apply(profile: Profile, base: &str, log: &mut dyn FnMut(String)) -> Result<String, String> {
     let never = Default::default();
-    servers::ensure(Server::Ollama, Path::new("."), &never, &mut |_| {})?;
+    servers::ensure(Server::Ollama, Path::new("."), &never, log)?;
+    log(format!("[gui  ] building {} from {base} ...", profile.variant()));
     let resp = ureq::post("http://127.0.0.1:11434/api/create")
         .send_json(json!({ "model": profile.variant(), "from": base, "parameters": profile.parameters(), "stream": false }))
         .map_err(|e| format!("Ollama could not build {} from {base}: {e}", profile.variant()))?;
@@ -100,6 +101,116 @@ pub fn apply(profile: Profile, base: &str) -> Result<String, String> {
         done.push("Pi");
     }
     Ok(format!("{} ready ({base}){}", profile.variant(), if done.is_empty() { String::new() } else { format!(", set up in {}", done.join(" and ")) }))
+}
+
+/// Points Pi (and so T3 Code) and OpenCode at a model served by the llama.cpp router, and enables the
+/// Pi provider in T3 Code. No Ollama involved: the router loads the GGUF itself.
+pub fn llama_cpp_apply(model: &str, base_url: &str) -> Result<String, String> {
+    let mut done = vec![];
+    if let Some(p) = home(".pi/agent/models.json") {
+        update_json(&p, |v| pi_llama_entry(v, model, base_url))?;
+        done.push("Pi");
+    }
+    if let Some(p) = home(".config/opencode/opencode.json") {
+        update_json(&p, |v| opencode_llama_entry(v, model, base_url))?;
+        done.push("OpenCode");
+    }
+    // only if T3 Code is installed - don't invent its settings file
+    if let Some(p) = home(".t3/userdata/settings.json").filter(|p| p.is_file()) {
+        update_json(&p, t3_pi_provider)?;
+        done.push("T3 Code");
+    }
+    let name = crate::llamacpp::display_name(model);
+    Ok(if done.is_empty() {
+        format!("{name}: no Pi, OpenCode or T3 Code config found")
+    } else {
+        format!("{name} set up in {}", done.join(", "))
+    })
+}
+
+fn llama_provider(base_url: &str) -> Value {
+    json!({
+        "name": "llama.cpp (local)",
+        "baseUrl": format!("{base_url}/v1"),
+        "api": "openai-completions",
+        "apiKey": "none",
+        "models": [],
+    })
+}
+
+fn pi_llama_entry(v: &mut Value, model: &str, base_url: &str) {
+    if !v["providers"].is_object() {
+        v["providers"] = json!({});
+    }
+    let provider = &mut v["providers"][crate::llamacpp::PROVIDER];
+    if !provider.is_object() {
+        *provider = llama_provider(base_url);
+    }
+    provider["baseUrl"] = json!(format!("{base_url}/v1"));
+    provider["api"] = json!("openai-completions");
+    if provider.get("apiKey").is_none() {
+        provider["apiKey"] = json!("none");
+    }
+    let entry = json!({
+        "id": model,
+        "name": crate::llamacpp::display_name(model),
+        "contextWindow": crate::llamacpp::CONTEXT,
+        "maxTokens": crate::llamacpp::MAX_TOKENS,
+    });
+    if !provider["models"].is_array() {
+        provider["models"] = json!([]);
+    }
+    let models = provider["models"].as_array_mut().expect("array");
+    match models.iter_mut().find(|m| m["id"] == model) {
+        Some(m) => *m = entry,
+        None => models.push(entry),
+    }
+}
+
+fn opencode_llama_entry(v: &mut Value, model: &str, base_url: &str) {
+    if !v["provider"].is_object() {
+        v["provider"] = json!({});
+    }
+    let provider = &mut v["provider"][crate::llamacpp::PROVIDER];
+    if !provider.is_object() {
+        *provider = json!({ "npm": "@ai-sdk/openai-compatible", "name": "llama.cpp (local)", "models": {} });
+    }
+    if provider.get("npm").is_none() {
+        provider["npm"] = json!("@ai-sdk/openai-compatible");
+    }
+    if provider.get("name").is_none() {
+        provider["name"] = json!("llama.cpp (local)");
+    }
+    if !provider["options"].is_object() {
+        provider["options"] = json!({});
+    }
+    provider["options"]["baseURL"] = json!(format!("{base_url}/v1"));
+    if !provider["models"].is_object() {
+        provider["models"] = json!({});
+    }
+    provider["models"][model] = json!({
+        "name": crate::llamacpp::display_name(model),
+        "limit": { "context": crate::llamacpp::CONTEXT, "output": crate::llamacpp::MAX_TOKENS },
+    });
+}
+
+/// T3 Code only offers Pi's models when the Pi provider instance is enabled.
+fn t3_pi_provider(v: &mut Value) {
+    if !v["providerInstances"].is_object() {
+        v["providerInstances"] = json!({});
+    }
+    let pi = &mut v["providerInstances"]["pi"];
+    if !pi.is_object() {
+        *pi = json!({ "driver": "pi", "displayName": "Pi", "enabled": true, "config": { "customModels": [] } });
+    }
+    pi["driver"] = json!("pi");
+    pi["enabled"] = json!(true);
+    if pi.get("displayName").is_none() {
+        pi["displayName"] = json!("Pi");
+    }
+    if !pi["config"].is_object() {
+        pi["config"] = json!({ "customModels": [] });
+    }
 }
 
 /// Loads the variant into memory now, so the first message in the editor doesn't wait for it.
@@ -247,5 +358,38 @@ mod tests {
         assert_eq!(models.len(), 2);
         assert!(models[0].get("thinkingLevelMap").is_none());
         assert_eq!(models[1]["thinkingLevelMap"]["low"], "none");
+    }
+
+    #[test]
+    fn llama_cpp_entries_merge_and_keep_the_rest() {
+        let model = crate::llamacpp::DEFAULT_MODEL;
+        let base = "http://127.0.0.1:8080";
+
+        let mut pi = json!({ "providers": { "ollama": { "baseUrl": "u" }, "llama-cpp": { "baseUrl": "old", "models": [{ "id": "other" }] } } });
+        pi_llama_entry(&mut pi, model, base);
+        pi_llama_entry(&mut pi, model, base);
+        assert_eq!(pi["providers"]["ollama"]["baseUrl"], "u");
+        let lc = &pi["providers"]["llama-cpp"];
+        assert_eq!(lc["baseUrl"], "http://127.0.0.1:8080/v1");
+        assert_eq!(lc["api"], "openai-completions");
+        let models = lc["models"].as_array().unwrap();
+        assert_eq!(models.len(), 2, "the model is updated, not duplicated");
+        assert_eq!(models[1]["id"], model);
+        assert_eq!(models[1]["contextWindow"], crate::llamacpp::CONTEXT);
+
+        let mut oc = json!({ "model": "keep", "provider": { "llama-cpp": { "npm": "keep", "models": { "other": {} } } } });
+        opencode_llama_entry(&mut oc, model, base);
+        assert_eq!(oc["model"], "keep");
+        assert_eq!(oc["provider"]["llama-cpp"]["npm"], "keep");
+        assert_eq!(oc["provider"]["llama-cpp"]["options"]["baseURL"], "http://127.0.0.1:8080/v1");
+        assert!(oc["provider"]["llama-cpp"]["models"]["other"].is_object());
+        assert_eq!(oc["provider"]["llama-cpp"]["models"][model]["limit"]["context"], crate::llamacpp::CONTEXT);
+
+        let mut t3 = json!({ "favorites": [1], "providerInstances": { "pi": { "enabled": false, "config": {} }, "grok": { "enabled": true } } });
+        t3_pi_provider(&mut t3);
+        assert_eq!(t3["favorites"], json!([1]));
+        assert_eq!(t3["providerInstances"]["pi"]["enabled"], true);
+        assert_eq!(t3["providerInstances"]["pi"]["driver"], "pi");
+        assert_eq!(t3["providerInstances"]["grok"]["enabled"], true);
     }
 }

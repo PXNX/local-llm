@@ -29,12 +29,16 @@ impl App {
 
     fn checklist(&mut self, ui: &mut egui::Ui) {
         let Some(r) = &self.repo else { return };
+        self.poll_llama_router();
         let python_ok = r.paths.python().is_file();
         let llm = self.llm();
         let llm_ok = match llm.provider {
             Provider::OpenRouter => r.env.is_set("OPENROUTER_API_KEY"),
             Provider::Ollama => r.models.status(&crate::models::ollama_id(&llm.ollama_model)).usable(),
             Provider::OpenCode => crate::flows::opencode2_installed(),
+            Provider::LlamaCpp => {
+                matches!(self.coding.lock().unwrap().llama.status.as_ref(), Some(Ok(router)) if router.running)
+            }
         };
         let needed: Vec<String> = FlowId::ALL.iter().flat_map(|id| self.needs(*id).models).collect::<BTreeSet<_>>().into_iter().collect();
         let missing: Vec<String> = needed.iter().filter(|m| !r.models.status(m).usable()).cloned().collect();
@@ -100,6 +104,11 @@ impl App {
                 Provider::Ollama => format!("local model {} not downloaded yet", llm.ollama_model),
                 Provider::OpenCode if llm_ok => "OpenCode Zen (free cloud models, no key, no GPU memory used)".into(),
                 Provider::OpenCode => "OpenCode 2 is missing - run opencode-wrap\\install-opencode2.bat".into(),
+                Provider::LlamaCpp if llm_ok => format!(
+                    "llama.cpp router, model {}",
+                    crate::llamacpp::model_id(&r.env.get(crate::llamacpp::MODEL_KEY))
+                ),
+                Provider::LlamaCpp => "llama.cpp router is not running - start it on the Coding page".into(),
             };
             if row(ui, llm_ok, false, "Vision AI (captions, ratings, prompts)", llm_text, Some("Set up")) {
                 action = Some(2);

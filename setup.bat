@@ -86,6 +86,6 @@ echo Done. Next steps:
 echo   1. Update the NVIDIA driver to ^>= 580 (needed by ComfyUI, see README).
 echo   2. Run 0-download-all.bat to download the models.
 echo   3. T3 Code (nightly/preview ^>= 0.0.46): Settings ^> Providers ^> OpenCode, enable it with binary
-echo      %USERPROFILE%\.opencode2\bin\opencode.exe (default model: free opencode/muse-spark-1.3-contributor-free).
+echo      %USERPROFILE%\.opencode2\bin\opencode.exe (default model: free opencode/deepseek-v4.1-flash-free).
 echo      Optional: Pi with binary %USERPROFILE%\.bun\bin\pi.exe for the local JetBrains model.
 pause

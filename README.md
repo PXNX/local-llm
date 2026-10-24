@@ -16,11 +16,13 @@ The OpenCode config template is `config/opencode.json`, the Pi ones `config/pi-m
 All models live in **one folder**: `MODELS_DIR` in `.env` (empty = `models\` in this folder; GUI: Settings > Model
 storage). ComfyUI's folders (`checkpoints\`, `diffusion_models\`, `text_encoders\`, `vae\` ...) sit directly in it,
 the other tools in subfolders: `ollama\` (`OLLAMA_MODELS`), `huggingface\` (`HF_HOME`: OWLv2 + CLIP of the characters
-flow), `torch\` (`TORCH_HOME`: Demucs), `u2net\` (`U2NET_HOME`: rembg), `kokoro\` (comedy voices). Every `.bat` calls
+flow and the llama.cpp router's GGUFs), `torch\` (`TORCH_HOME`: Demucs), `u2net\` (`U2NET_HOME`: rembg), `kokoro\`
+(comedy voices). Every `.bat` calls
 `common\models-env.bat`, the Python flows `common/storage.py` (via `import common`), and the GUI passes the same
 variables to Ollama, ComfyUI and the flows; `start-comfyui.bat` starts ComfyUI with `--models-directory` and still
 finds files left in `ComfyUI\models` (`config/comfyui-old-models.yaml`). `setup.bat` and the GUI also save
-`OLLAMA_MODELS` as a user variable, so restart the Ollama tray app once so it uses the folder too. Models from older
+`OLLAMA_MODELS` as a user variable; the Ollama tray app keeps its own location (Settings > Model location), set it to
+`models\ollama` and restart it. Models from older
 setups (ComfyUI's own folder, `%USERPROFILE%\.ollama\models`, the Hugging Face / torch hub caches, `~\.u2net`,
 `comedy\models`, `kokoro\` in the repo root) are offered to be moved on the GUI's Models page (the Start page flags
 them too); `download-models.sh` moves ComfyUI files over by itself.
@@ -34,6 +36,7 @@ finds this folder next to itself or asks for it (and can clone it on a fresh PC)
 - **Start page**: setup checklist (ComfyUI/Python, NVIDIA driver >= 580, vision AI key, models, Telegram) with one-click fixes, a short line about what is running and CPU/RAM/GPU/VRAM usage.
 - **Queue**: one flow runs at a time (the GPU gets everything). "Add to queue" works on any flow at any time - also the running one, e.g. a second sticker batch with other input; each waiting run keeps the settings it was added with. The Queue page shows the running run (progress, ETA, cancel), the waiting runs (reorder, remove, clear) and the runs finished this session with their result; the top bar has one compact progress indicator that links there.
 - **Flows**: when a flow is picked, missing `.env` values and models are asked for right away. The Run area shows the Run / Add to queue button, how many runs of this flow are waiting, and the flow's latest run: progress (item x/y, ComfyUI sampler steps), elapsed time and ETA next to Cancel; every log line is timestamped and the run starts by logging its exact command line (also copyable); the log shows colors, and links / file paths in it are clickable (Top 5 prints the `t.me` link of every post).
+- **Coding**: Speed/Quality toggle and setup buttons (build an Ollama variant from a model that is already on disk - nothing is downloaded), plus a llama.cpp card: starts `llama serve` hidden in the background, loads the GGUF model, unloads or stops it again, and writes the `llama-cpp` provider into Pi/OpenCode (and enables Pi in T3 Code). The router uses the one models folder (`HF_HOME`), so its GGUFs live under `models\huggingface\`. A notification-area icon offers Open/Unload/Stop/Quit; the router is a separate process, so it keeps serving after the window closes. A Console card shows the command lines the GUI starts, what the router prints and Ollama's `server.log` (the editors keep their own console). **Flows use** picks the flow LLM: the tuned Ollama model, OpenCode Zen (deepseek flash), the llama.cpp router or OpenRouter.
 - **Models**: everything the flows need, what is on disk, resumable downloads with progress - ComfyUI checkpoints, Ollama models, and other local model files the flows manage themselves (e.g. the comedy flow's Kokoro TTS voices). Nothing is fetched twice: `.done` markers (same as `download-models.sh`), hard links for files that exist under another name, and ComfyUI files that are byte-identical to an Ollama blob are shared (sha256). Everything is in the one models folder, on any drive (Settings > Model storage); files still in old places (ComfyUI's own folder, Ollama's default folder, the Hugging Face / torch / rembg caches, `comedy\models`, a previous models folder) are listed with a "Move them" button (instant on the same drive).
 - Starts Ollama/ComfyUI when a flow needs them (Ollama with low-VRAM settings), runs itself at below-normal priority and draws nothing while idle, so the models get the machine.
 - **Desktop shortcut**: Settings > Installation > *Create desktop shortcut* puts `local-llm.lnk` (with the app icon, started in this folder) on the Desktop, also a OneDrive-redirected one; `setup.bat` does the same when `gui\target\release\local-llm.exe` exists. The icon source is `gui/assets/icon.svg` (`gui/assets/make_icon.py` regenerates `icon.ico`/`icon.png`).
@@ -53,7 +56,7 @@ Free models are often rate limited; up to 3 fallbacks are tried in order, then t
 GPU memory, so ComfyUI keeps its models loaded between runs.
 
 `LLM_PROVIDER=opencode` uses the free [OpenCode Zen](https://opencode.ai/zen) models without any key
-(default `OPENCODE_MODEL=opencode/muse-spark-1.3-contributor-free`, vision-capable; others e.g.
+(default `OPENCODE_MODEL=opencode/deepseek-v4.1-flash-free`; `opencode/nemotron-3.5-super-vl-free` sees images, others e.g.
 `opencode/mimo-v2.6-flash-free`, list: http://127.0.0.1:8000/v1/models). They go through **opencode-wrap**
 (`opencode-wrap/server.ts`, a Bun port of [OpenCode-Wrap](https://github.com/Fast-Editor/OpenCode-Wrap) for the
 OpenCode 2 server API): an OpenAI-compatible API at http://127.0.0.1:8000/v1 (`OPENCODE_WRAP_URL`) in front of
@@ -79,7 +82,7 @@ window, e.g. for other tools. `LLM_LOCAL_FALLBACK=1` falls back to the local Oll
 | `0-download-all.bat` | Downloads/resumes all models (Ollama + ComfyUI). Safe to re-run. |
 | `1-image-video-comfyui.bat` | Frees VRAM (stops Ollama models), starts ComfyUI, opens the browser |
 | `2-stickers.bat` | Image -> 3 transparent WebP stickers of the pictured animal/person acting out reactions, no text by default (`--with-text` adds a short one). Drag & drop an image onto it or double-click and pick one. Starts Ollama + ComfyUI automatically. Result: `stickers\out\<image name>\` |
-| `3-coding-llm-t3code.bat` | Opens T3 Code with the free cloud model `opencode/muse-spark-1.3-contributor-free` (OpenCode Zen, no key, no GPU). `3-coding-llm-t3code.bat opencode/mimo-v2.6-flash-free` for another Zen model; a local model like `qwen3:8b` / `gpt-oss:20b` starts Ollama and preloads it; `... qwen3:8b cli` for OpenCode in the terminal |
+| `3-coding-llm-t3code.bat` | Opens T3 Code with the free cloud model `opencode/deepseek-v4.1-flash-free` (OpenCode Zen, no key, no GPU). `3-coding-llm-t3code.bat opencode/mimo-v2.6-flash-free` for another Zen model; a local model like `qwen3:8b` / `gpt-oss:20b` starts Ollama and preloads it; `... qwen3:8b cli` for OpenCode in the terminal |
 | `opencode-wrap.bat` | OpenAI-compatible API for the free OpenCode Zen models at http://127.0.0.1:8000/v1 (see Vision AI); the flows start it by themselves with `LLM_PROVIDER=opencode` |
 | `4-vectorize.bat` | PNG/JPG -> SVG vector trace (like vectorizer.ai / Vector Magic). Drag & drop an image onto it or double-click and pick one. Fully local (`vtracer`), no Ollama/ComfyUI needed. Result: an `.svg` next to the input image |
 | `5-soundfx.bat` | Generates game sound effects: mine/Shahed explosions, a Patriot rocket-motor launch sound, and a processed "Slava Ukraini" voice line; `--speech clip.mp3` strips a recording down to speech only. Fully local (numpy/scipy synthesis, Demucs for speech), no Ollama/ComfyUI needed. Result: `soundfx\out\` |
@@ -327,10 +330,15 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
 ## B. Coding LLM - OpenCode in T3 Code (free Zen models or local Ollama)
 
 - **Default: free cloud models** of OpenCode Zen, no key, built into OpenCode: `config/opencode.json` sets
-  `"model": "opencode/muse-spark-1.3-contributor-free"` and `"small_model": "opencode/mimo-v2.6-flash-free"`
+  `"model": "opencode/deepseek-v4.1-flash-free"` and `"small_model": "opencode/mimo-v2.6-flash-free"`
   (titles/summaries). Other good free ones: `opencode/longcat-2.5-preview-free`, `opencode/nemotron-3-ultra-free`
   (`opencode models opencode` lists them). Free models can be rate limited or rotated by OpenCode. The local Ollama
   models below stay available as `ollama/<model>`.
+
+- **Flows' LLM** (`common/llm.py`, `LLM_PROVIDER` in `.env`): `openrouter`, `opencode` (Zen, default
+  `opencode/deepseek-v4.1-flash-free`), `llamacpp` (the GGUF router below - start it on the Coding page, the flow
+  unloads it after writing) or `ollama`. Pick it on the Coding page under **Flows use** or in Settings > Vision AI.
+  `LLM_LOCAL_FALLBACK=1` (default) uses the local Ollama model when the chosen one is down or fails.
 
 - **Ollama** (installed via winget) serves models at http://localhost:11434.
   It uses the RTX 2060 via **Vulkan** and works even with the old driver.
@@ -344,17 +352,22 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   | gpt-oss:20b | ~13 GB | GPU + CPU, usable |
   | qwen3-coder:30b | ~19 GB | MoE, mostly CPU/RAM, slow, pushes RAM to the limit |
   | qwen3.8-blend:27b | ~12.6 GB | [JetBrains Qwen3.8/3.6 27B blend](https://huggingface.co/collections/JetBrains/qwen38-36-27b-blend), IQ3_S from `hf.co/JetBrains/Qwen3.8-3.6-27B-blend-GGUF:IQ3_S`. Dense 27B, strongest coder here but slowest (~1-3 tokens/s, mostly CPU). Q4_K_M (16.8 GB) does not fit in 16 GB RAM |
+  | qwen3.5:9b | ~7.6 GB | **not downloaded**, offered on the Coding page and under Models > Coding: 256K context, text+image, tools/thinking, current 9B all-rounder |
+  | nemotron-3.5-bolt:e4b-q4_K_M | ~7.9 GB | **not downloaded**, offered there too: NVIDIA MoE with 4B active, 128K context, vision/tools, tuned for local coding |
 - **OpenCode 2** (v2.x, built from source by `opencode-wrap\install-opencode2.bat` into
   `%USERPROFILE%\.opencode2\bin\opencode.exe`, see Vision AI; npm's `opencode-ai` is still 1.x), config:
-  `%USERPROFILE%\.config\opencode\opencode.json` (provider `ollama`, OpenAI-compatible endpoint `/v1`), same as 1.x.
+  `%USERPROFILE%\.config\opencode\opencode.json` (providers `ollama` and `llama-cpp`, OpenAI-compatible `/v1`), same
+  as 1.x. The repo's `opencode.json` adds `CLAUDE.md` to `instructions`, so OpenCode follows the project rules.
 - **T3 Code** (nightly/preview >= 0.0.46, which recommends OpenCode >= 2.0.18): OpenCode provider enabled with
   binaryPath `%USERPROFILE%\.opencode2\bin\opencode.exe` (`providerInstances.opencode`) in
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code, pick the model under the
-  OpenCode provider: `opencode/muse-spark-1.3-contributor-free` (default) or `ollama/qwen3:8b` (or another one).
+  OpenCode provider: `opencode/deepseek-v4.1-flash-free` (default) or `ollama/qwen3:8b` (or another one).
 - **Pi** ([pi coding agent](https://github.com/earendil-works/pi), bun global install, package
-  `@earendil-works/pi-coding-agent`): terminal agent, defaults to the local JetBrains blend
-  (`ollama/qwen3.8-blend:27b`, thinking `low`). Config: `%USERPROFILE%\.pi\agent\models.json` (provider `ollama`,
-  OpenAI-compatible `/v1`, 32K context like `OLLAMA_CONTEXT_LENGTH`) and `settings.json`; templates in `config\pi-*.json`.
+  `@earendil-works/pi-coding-agent`): terminal agent, defaults to the local Nemotron on the llama.cpp router
+  (`llama-cpp/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M`); the JetBrains blend stays available as
+  `ollama/qwen3.8-blend:27b` (thinking `low`). Config: `%USERPROFILE%\.pi\agent\models.json` (providers `llama-cpp`
+  and `ollama`, OpenAI-compatible `/v1`, 32K context for Ollama like `OLLAMA_CONTEXT_LENGTH`) and `settings.json`;
+  templates in `config\pi-*.json`.
   `3-coding-llm-t3code.bat qwen3.8-blend:27b pi` starts Ollama, preloads the model and opens Pi; or just `pi` in any
   project folder (`/model` switches, e.g. to `ollama/qwen3:8b`).
   **Pi in T3 Code** needs a T3 Code nightly/preview (>= 0.0.46): `providerInstances.pi` in T3's `settings.json`
@@ -364,6 +377,16 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   "properties must be an object", e.g. with the 27B blend). `setup.bat` installs `config\pi-ollama-schema-fix.ts`
   as a Pi extension (`%USERPROFILE%\.pi\agent\extensions\`) that adds them.
   The 27B blend is slow here: a small file edit took ~3-6 min including model load.
+- **llama.cpp router** (GUI > Coding, next to Ollama): `llama serve --host 127.0.0.1 --port 8080 --models-max 1`
+  runs hidden in the background and `POST /models/load` loads
+  `nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M` (OpenAI-compatible at http://127.0.0.1:8080/v1, 57K context).
+  "Set up Pi + OpenCode" adds the `llama-cpp` provider to `%USERPROFILE%\.pi\agent\models.json` and
+  `%USERPROFILE%\.config\opencode\opencode.json`, and enables `providerInstances.pi` in T3 Code's
+  `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code pick provider **Pi**, model
+  `llama-cpp/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M`; Pi in a terminal: `pi --model llama-cpp/...`.
+  Unload frees the VRAM again (`POST /models/unload`), Stop ends `llama serve` (also for a router started outside
+  the GUI). `.env`: `LLAMA_CPP_MODEL`, `LLAMA_CPP_URL`, `LLAMA_CPP_EXE` (default `llama` from PATH). The same router
+  can answer the flows: pick **llama.cpp** under **Flows use** (`LLM_PROVIDER=llamacpp`).
 - **Ollama >= 0.40 model location**: the tray app passes its own *Settings > Model location* to the server and ignores
   `OLLAMA_MODELS`. If `ollama list` is empty after an update, set it there to `<MODELS_DIR>\ollama` (e.g.
   `C:\dev\local-llm\models\ollama`) and restart Ollama.

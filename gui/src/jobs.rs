@@ -33,7 +33,7 @@ pub enum Level {
     Error,
 }
 
-fn level(text: &str, err: bool) -> Level {
+pub(crate) fn level(text: &str, err: bool) -> Level {
     let body = text.strip_prefix('[').and_then(|r| r.split_once(']')).map_or(text, |(_, rest)| rest.trim_start());
     if body.starts_with("ERROR:") {
         Level::Error
@@ -290,13 +290,20 @@ fn run(ctx: &egui::Context, h: &JobHandle, l: Launch) -> State {
     let mut cmd = Command::new(&l.python);
     cmd.arg("-s").current_dir(&l.root).env("PYTHONUTF8", "1").env("PYTHONIOENCODING", "utf-8").env("PYTHONUNBUFFERED", "1");
     cmd.envs(crate::paths::current_env());
-    let child = if l.console {
-        cmd.arg(l.root.join("common").join("console_run.py")).arg(&l.script).args(&l.args);
+    let script_path = &l.script;
+    let child = if script_path.to_str().unwrap_or("").ends_with(".bat") {
+        // Execute .bat file via cmd.exe to ensure background execution (for tray icon effect)
+        cmd.arg("cmd").arg("/C").arg(script_path.to_str().unwrap()).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        sys::hide_window(&mut cmd);
+        cmd.spawn()
+    } else if l.console {
+        cmd.arg(l.root.join("common").join("console_run.py")).arg(script_path).args(&l.args);
         sys::new_console(&mut cmd);
         log_mut("[gui  ] running in its own console window (type the Telegram login there if asked)".into());
         cmd.spawn()
     } else {
-        cmd.arg("-u").arg(&l.script).args(&l.args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // Original Python execution path
+        cmd.arg("-u").arg(script_path).args(&l.args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         sys::hide_window(&mut cmd);
         cmd.spawn()
     };
@@ -422,7 +429,7 @@ const ANSI: [egui::Color32; 8] = [
 ];
 
 /// Removes ANSI escape sequences, keeping SGR foreground colors (30-37, 90-97) as colored ranges.
-fn parse_ansi(s: &str) -> (String, Vec<(usize, usize, egui::Color32)>) {
+pub(crate) fn parse_ansi(s: &str) -> (String, Vec<(usize, usize, egui::Color32)>) {
     if !s.contains('\u{1b}') {
         return (s.to_owned(), Vec::new());
     }
