@@ -54,6 +54,34 @@
             "context": 32768,
             "output": 8192
           }
+        },
+        "local-coder:long": {
+          "name": "Local coder - 200k (qwen3.8-blend:27b, thinking)",
+          "limit": {
+            "context": 204800,
+            "output": 8192
+          }
+        }
+      }
+    },
+    "openrouter": {
+      "options": {
+        "apiKey": "{env:OPENROUTER_API_KEY}"
+      },
+      "models": {
+        "cohere/north-mini-code:free": {
+          "name": "Cohere North Mini Code (free, OpenRouter)",
+          "limit": {
+            "context": 256000,
+            "output": 16384
+          }
+        },
+        "poolside/laguna-s-2.1:free": {
+          "name": "Poolside Laguna S 2.1 (free, OpenRouter)",
+          "limit": {
+            "context": 262144,
+            "output": 16384
+          }
         }
       }
     },

@@ -1,6 +1,6 @@
-//! Local coding models for T3 Code / OpenCode / Pi, tuned for speed or for quality.
+//! Local coding models for T3 Code / OpenCode / Pi, tuned for speed, quality or a 200k context.
 //!
-//! The toggle (`LLM_LOCAL_PROFILE` in .env) picks one of two Ollama variants built from models that are
+//! The toggle (`LLM_LOCAL_PROFILE` in .env) picks one of three Ollama variants built from models that are
 //! already downloaded - `ollama create` shares the weights, so nothing is downloaded or copied. Each
 //! variant fixes the context size and Qwen's recommended sampling; the editor configs say whether the
 //! model thinks before answering. The flows' local text prompts (common/llm.py) follow the same toggle.
@@ -17,24 +17,32 @@ use crate::sys;
 pub enum Profile {
     Speed,
     Quality,
+    /// The quality model with a 200k context, for whole-repo work; speed doesn't matter.
+    Long,
 }
 
 impl Profile {
-    pub const ALL: [Profile; 2] = [Profile::Speed, Profile::Quality];
+    pub const ALL: [Profile; 3] = [Profile::Speed, Profile::Quality, Profile::Long];
 
     pub fn from_env(v: &str) -> Self {
-        if v.trim().eq_ignore_ascii_case("quality") { Profile::Quality } else { Profile::Speed }
+        match v.trim().to_ascii_lowercase().as_str() {
+            "quality" => Profile::Quality,
+            "long" => Profile::Long,
+            _ => Profile::Speed,
+        }
     }
     pub fn env_value(self) -> &'static str {
         match self {
             Profile::Speed => "speed",
             Profile::Quality => "quality",
+            Profile::Long => "long",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Profile::Speed => "Speed",
             Profile::Quality => "Quality",
+            Profile::Long => "200k",
         }
     }
     /// .env key of the downloaded model this profile's variant is built from.
@@ -42,12 +50,13 @@ impl Profile {
         match self {
             Profile::Speed => "LLM_CODING_SPEED_MODEL",
             Profile::Quality => "LLM_CODING_QUALITY_MODEL",
+            Profile::Long => "LLM_CODING_LONG_MODEL",
         }
     }
     pub fn default_base(self) -> &'static str {
         match self {
             Profile::Speed => "qwen3:8b",
-            Profile::Quality => "qwen3.8-blend:27b",
+            Profile::Quality | Profile::Long => "qwen3.8-blend:27b",
         }
     }
     /// The Ollama variant the editors are pointed at.
@@ -55,6 +64,7 @@ impl Profile {
         match self {
             Profile::Speed => "local-coder:speed",
             Profile::Quality => "local-coder:quality",
+            Profile::Long => "local-coder:long",
         }
     }
     /// Context window: the KV cache of a smaller one leaves room for more layers on a small GPU.
@@ -62,10 +72,11 @@ impl Profile {
         match self {
             Profile::Speed => 16384,
             Profile::Quality => 32768,
+            Profile::Long => 204800,
         }
     }
     pub fn thinking(self) -> bool {
-        self == Profile::Quality
+        self != Profile::Speed
     }
     /// Qwen3's recommended sampling: non-thinking mode for speed, thinking mode for quality.
     fn parameters(self) -> Value {
@@ -76,6 +87,7 @@ impl Profile {
         match self {
             Profile::Speed => "small model, 16k context, answers without thinking first - quick replies and edits",
             Profile::Quality => "large model, 32k context, thinks before answering - better code, several times slower",
+            Profile::Long => "large model, 200k context, thinks before answering - whole repos in one session; needs ~7 GB more memory and is slow",
         }
     }
 }
@@ -105,14 +117,14 @@ pub fn apply(profile: Profile, base: &str, log: &mut dyn FnMut(String)) -> Resul
 
 /// Points Pi (and so T3 Code) and OpenCode at a model served by the llama.cpp router, and enables the
 /// Pi provider in T3 Code. No Ollama involved: the router loads the GGUF itself.
-pub fn llama_cpp_apply(model: &str, base_url: &str) -> Result<String, String> {
+pub fn llama_cpp_apply(model: &str, base_url: &str, ctx: u32) -> Result<String, String> {
     let mut done = vec![];
     if let Some(p) = home(".pi/agent/models.json") {
-        update_json(&p, |v| pi_llama_entry(v, model, base_url))?;
+        update_json(&p, |v| pi_llama_entry(v, model, base_url, ctx))?;
         done.push("Pi");
     }
     if let Some(p) = home(".config/opencode/opencode.json") {
-        update_json(&p, |v| opencode_llama_entry(v, model, base_url))?;
+        update_json(&p, |v| opencode_llama_entry(v, model, base_url, ctx))?;
         done.push("OpenCode");
     }
     // only if T3 Code is installed - don't invent its settings file
@@ -121,10 +133,11 @@ pub fn llama_cpp_apply(model: &str, base_url: &str) -> Result<String, String> {
         done.push("T3 Code");
     }
     let name = crate::llamacpp::display_name(model);
+    let ctx = crate::llamacpp::context_label(ctx);
     Ok(if done.is_empty() {
         format!("{name}: no Pi, OpenCode or T3 Code config found")
     } else {
-        format!("{name} set up in {}", done.join(", "))
+        format!("{name} ({ctx} context) set up in {}", done.join(", "))
     })
 }
 
@@ -138,7 +151,7 @@ fn llama_provider(base_url: &str) -> Value {
     })
 }
 
-fn pi_llama_entry(v: &mut Value, model: &str, base_url: &str) {
+fn pi_llama_entry(v: &mut Value, model: &str, base_url: &str, ctx: u32) {
     if !v["providers"].is_object() {
         v["providers"] = json!({});
     }
@@ -154,7 +167,7 @@ fn pi_llama_entry(v: &mut Value, model: &str, base_url: &str) {
     let entry = json!({
         "id": model,
         "name": crate::llamacpp::display_name(model),
-        "contextWindow": crate::llamacpp::CONTEXT,
+        "contextWindow": ctx,
         "maxTokens": crate::llamacpp::MAX_TOKENS,
     });
     if !provider["models"].is_array() {
@@ -167,7 +180,7 @@ fn pi_llama_entry(v: &mut Value, model: &str, base_url: &str) {
     }
 }
 
-fn opencode_llama_entry(v: &mut Value, model: &str, base_url: &str) {
+fn opencode_llama_entry(v: &mut Value, model: &str, base_url: &str, ctx: u32) {
     if !v["provider"].is_object() {
         v["provider"] = json!({});
     }
@@ -190,7 +203,7 @@ fn opencode_llama_entry(v: &mut Value, model: &str, base_url: &str) {
     }
     provider["models"][model] = json!({
         "name": crate::llamacpp::display_name(model),
-        "limit": { "context": crate::llamacpp::CONTEXT, "output": crate::llamacpp::MAX_TOKENS },
+        "limit": { "context": ctx, "output": crate::llamacpp::MAX_TOKENS },
     });
 }
 
@@ -361,13 +374,28 @@ mod tests {
     }
 
     #[test]
+    fn profiles_round_trip_through_env_and_long_has_200k() {
+        for p in Profile::ALL {
+            assert_eq!(Profile::from_env(p.env_value()), p);
+        }
+        assert_eq!(Profile::from_env("bogus"), Profile::Speed);
+        assert_eq!(Profile::Long.variant(), "local-coder:long");
+        assert_eq!(Profile::Long.parameters()["num_ctx"], 204800);
+        assert!(Profile::Long.thinking());
+        let mut pi = json!({});
+        pi_entry(&mut pi, Profile::Long, "qwen3.8-blend:27b");
+        assert_eq!(pi["providers"]["ollama"]["models"][0]["contextWindow"], 204800);
+        assert!(pi["providers"]["ollama"]["models"][0].get("thinkingLevelMap").is_none());
+    }
+
+    #[test]
     fn llama_cpp_entries_merge_and_keep_the_rest() {
         let model = crate::llamacpp::DEFAULT_MODEL;
         let base = "http://127.0.0.1:8080";
 
         let mut pi = json!({ "providers": { "ollama": { "baseUrl": "u" }, "llama-cpp": { "baseUrl": "old", "models": [{ "id": "other" }] } } });
-        pi_llama_entry(&mut pi, model, base);
-        pi_llama_entry(&mut pi, model, base);
+        pi_llama_entry(&mut pi, model, base, crate::llamacpp::CONTEXT);
+        pi_llama_entry(&mut pi, model, base, 131_072);
         assert_eq!(pi["providers"]["ollama"]["baseUrl"], "u");
         let lc = &pi["providers"]["llama-cpp"];
         assert_eq!(lc["baseUrl"], "http://127.0.0.1:8080/v1");
@@ -375,10 +403,10 @@ mod tests {
         let models = lc["models"].as_array().unwrap();
         assert_eq!(models.len(), 2, "the model is updated, not duplicated");
         assert_eq!(models[1]["id"], model);
-        assert_eq!(models[1]["contextWindow"], crate::llamacpp::CONTEXT);
+        assert_eq!(models[1]["contextWindow"], 131_072, "the latest context replaces the entry");
 
         let mut oc = json!({ "model": "keep", "provider": { "llama-cpp": { "npm": "keep", "models": { "other": {} } } } });
-        opencode_llama_entry(&mut oc, model, base);
+        opencode_llama_entry(&mut oc, model, base, crate::llamacpp::CONTEXT);
         assert_eq!(oc["model"], "keep");
         assert_eq!(oc["provider"]["llama-cpp"]["npm"], "keep");
         assert_eq!(oc["provider"]["llama-cpp"]["options"]["baseURL"], "http://127.0.0.1:8080/v1");

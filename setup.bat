@@ -47,6 +47,13 @@ for %%F in (models settings) do (
     echo Exists already, not overwritten. Template: config\pi-%%F.json
   )
 )
+rem Small local models answer "need more context" instead of exploring; these rules make them use their tools
+if not exist "%USERPROFILE%\.pi\agent\AGENTS.md" (
+  copy "%~dp0config\pi-agents.md" "%USERPROFILE%\.pi\agent\AGENTS.md" >nul
+  echo Installed %USERPROFILE%\.pi\agent\AGENTS.md
+) else (
+  echo Exists already, not overwritten. Template: config\pi-agents.md
+)
 rem Ollama rejects object tool schemas without "properties" (T3 Code's MCP tools); this extension adds them
 mkdir "%USERPROFILE%\.pi\agent\extensions" 2>nul
 copy /y "%~dp0config\pi-ollama-schema-fix.ts" "%USERPROFILE%\.pi\agent\extensions\ollama-schema-fix.ts" >nul
