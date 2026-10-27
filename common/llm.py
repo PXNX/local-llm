@@ -14,7 +14,7 @@ Configured in the repo's .env (real environment variables win):
   LLAMA_CPP_URL       llama.cpp router base URL, default http://127.0.0.1:8080 (started by the GUI)
   LLAMA_CPP_MODEL     model the router loads, default nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M
   OLLAMA_MODEL        local vision model, default qwen3-vl:4b
-  LLM_LOCAL_PROFILE   speed (default) or quality - the GUI's toggle: which local model answers text-only
+  LLM_LOCAL_PROFILE   speed (default), quality or long (200k context) - the GUI's toggle: which local model answers text-only
                       prompts when OLLAMA_TEXT_MODEL isn't set (LLM_CODING_SPEED_MODEL, default qwen3:8b, or
                       LLM_CODING_QUALITY_MODEL, default qwen3.8-blend:27b - much better, ~5x slower here)
   OLLAMA_TEXT_MODEL   local model for text-only prompts (text_json), overrides the profile - qwen3-vl:4b
@@ -154,7 +154,8 @@ def ollama_text_model():
     """OLLAMA_TEXT_MODEL, else the model of the speed/quality profile."""
     if _ENV.get("OLLAMA_TEXT_MODEL"):
         return _ENV["OLLAMA_TEXT_MODEL"]
-    if _ENV.get("LLM_LOCAL_PROFILE", "").strip().lower() == "quality":
+    # the 200k profile only differs in context size, which text prompts don't need
+    if _ENV.get("LLM_LOCAL_PROFILE", "").strip().lower() in ("quality", "long"):
         return _ENV.get("LLM_CODING_QUALITY_MODEL") or DEFAULT_QUALITY_TEXT_MODEL
     return _ENV.get("LLM_CODING_SPEED_MODEL") or DEFAULT_OLLAMA_TEXT_MODEL
 

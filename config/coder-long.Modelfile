@@ -1,0 +1,9 @@
+# local-coder:long - the GUI's Coding page builds it from LLM_CODING_LONG_MODEL; 3-coding-llm-t3code.bat
+# long uses this file when it is missing. Same model as quality with a 200k context (KV cache ~7 GB at q8_0).
+# Shares the weights of the model in FROM: nothing is downloaded.
+FROM qwen3.8-blend:27b
+PARAMETER num_ctx 204800
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER top_k 20
+PARAMETER min_p 0

@@ -377,6 +377,9 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   "properties must be an object", e.g. with the 27B blend). `setup.bat` installs `config\pi-ollama-schema-fix.ts`
   as a Pi extension (`%USERPROFILE%\.pi\agent\extensions\`) that adds them.
   The 27B blend is slow here: a small file edit took ~3-6 min including model load.
+  The GUI's Speed / Quality / **200k** toggle (Coding page) picks `local-coder:speed|quality|long`; `long` is the
+  blend with a 204800-token context (`config\coder-long.Modelfile`, base `LLM_CODING_LONG_MODEL`). Its KV cache is
+  ~7 GB at `q8_0`, on top of the ~12 GB weights, so on 16 GB RAM it swaps; use it when speed doesn't matter.
 - **llama.cpp router** (GUI > Coding, next to Ollama): `llama serve --host 127.0.0.1 --port 8080 --models-max 1`
   runs hidden in the background and `POST /models/load` loads
   `nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M` (OpenAI-compatible at http://127.0.0.1:8080/v1, 57K context).
@@ -384,6 +387,12 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   `%USERPROFILE%\.config\opencode\opencode.json`, and enables `providerInstances.pi` in T3 Code's
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code pick provider **Pi**, model
   `llama-cpp/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M`; Pi in a terminal: `pi --model llama-cpp/...`.
+  The context size is a picker on the Coding page (`LLAMA_CPP_CTX` in .env, default 57344; also `128k`, `200000`
+  ...): the GUI starts the router with `--ctx-size` and writes the same value to Pi's/OpenCode's model entry. A
+  router that is already running keeps its context - Stop router, then Start router. A bigger context needs more RAM.
+  Nemotron calls tools fine (`finish_reason: tool_calls`), but a small model drifts in T3 Code: T3 adds 44
+  `mcp__t3-code__*` tools, ~19k tokens on top of Pi's ~1.5k. `config\pi-agents.md` (installed as
+  `%USERPROFILE%\.pi\agent\AGENTS.md`) tells Pi models to explore the project with their tools before asking.
   Unload frees the VRAM again (`POST /models/unload`), Stop ends `llama serve` (also for a router started outside
   the GUI). `.env`: `LLAMA_CPP_MODEL`, `LLAMA_CPP_URL`, `LLAMA_CPP_EXE` (default `llama` from PATH). The same router
   can answer the flows: pick **llama.cpp** under **Flows use** (`LLM_PROVIDER=llamacpp`).

@@ -34,6 +34,8 @@ pub struct LlamaState {
     /// The action running right now ("starting router", ...).
     pub busy: Option<&'static str>,
     pub last: Option<Result<String, String>>,
+    /// The context the router was started with by this GUI (None: started elsewhere).
+    pub started_ctx: Option<u32>,
 }
 
 pub type Shared = Arc<Mutex<CodingState>>;
@@ -89,19 +91,25 @@ impl App {
         }
     }
 
-    /// Speed / Quality segmented toggle (top bar and Coding page).
+    /// Speed / Quality / 200k segmented toggle (top bar and Coding page).
     pub(super) fn profile_toggle(&mut self, ui: &mut egui::Ui) {
         let current = self.profile();
         let mut pick = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            for p in Profile::ALL {
-                let icon = if p == Profile::Speed { icons::ROCKET_LAUNCH } else { icons::DIAMOND_STONE };
+            let last = Profile::ALL.len() - 1;
+            for (i, p) in Profile::ALL.into_iter().enumerate() {
+                let icon = match p {
+                    Profile::Speed => icons::ROCKET_LAUNCH,
+                    Profile::Quality => icons::DIAMOND_STONE,
+                    Profile::Long => icons::MEMORY,
+                };
                 let on = p == current;
                 let color = if on { egui::Color32::WHITE } else { ui.visuals().text_color() };
+                let (left, right) = (if i == 0 { 6 } else { 0 }, if i == last { 6 } else { 0 });
                 let b = egui::Button::image_and_text(icon.image(15.0, color), RichText::new(p.label()).color(color))
                     .fill(if on { ui::ACCENT } else { ui.visuals().widgets.inactive.weak_bg_fill })
-                    .corner_radius(if p == Profile::Speed { egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 } } else { egui::CornerRadius { nw: 0, sw: 0, ne: 6, se: 6 } });
+                    .corner_radius(egui::CornerRadius { nw: left, sw: left, ne: right, se: right });
                 let tip = format!("local LLM tuned for {}: {}", p.label().to_lowercase(), p.summary());
                 if ui.add(b).on_hover_text(tip).clicked() {
                     pick = Some(p);
@@ -149,6 +157,43 @@ impl App {
                 r.env.get(llamacpp::EXE_KEY),
             ),
             None => (llamacpp::DEFAULT_URL.into(), llamacpp::DEFAULT_MODEL.into(), String::new()),
+        }
+    }
+
+    /// Context size the router loads the model with (`LLAMA_CPP_CTX` in .env).
+    pub(super) fn llama_ctx(&self) -> u32 {
+        self.repo.as_ref().map_or(llamacpp::CONTEXT, |r| llamacpp::context(&r.env.get(llamacpp::CTX_KEY)))
+    }
+
+    /// Context picker: the usual sizes, plus whatever is in .env if it is none of them.
+    fn llama_ctx_picker(&mut self, ui: &mut egui::Ui, running: bool) {
+        let current = self.llama_ctx();
+        let started = self.coding.lock().unwrap().llama.started_ctx;
+        let mut pick = current;
+        let mut choices = llamacpp::CONTEXT_CHOICES.to_vec();
+        if !choices.contains(&current) {
+            choices.push(current);
+            choices.sort_unstable();
+        }
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("llama-ctx").selected_text(llamacpp::context_label(current)).width(90.0).show_ui(ui, |ui| {
+                for c in choices {
+                    let default = if c == llamacpp::CONTEXT { " (default)" } else { "" };
+                    ui.selectable_value(&mut pick, c, format!("{}{default}", llamacpp::context_label(c)));
+                }
+            });
+            ui.label(RichText::new("tokens of context; the KV cache grows with it, so a big one needs more memory and loads slower").small().weak());
+        });
+        if pick != current {
+            self.save_env(&[(llamacpp::CTX_KEY, pick.to_string())]);
+        }
+        if running && started.unwrap_or(llamacpp::CONTEXT) != pick {
+            ui::status(
+                ui,
+                icons::ALERT,
+                AMBER,
+                format!("the running router uses {} - Stop router, then Start router to apply {}", llamacpp::context_label(started.unwrap_or(llamacpp::CONTEXT)), llamacpp::context_label(pick)),
+            );
         }
     }
 
@@ -253,6 +298,9 @@ impl App {
                 }
                 ui.end_row();
             }
+            ui.label("Context");
+            self.llama_ctx_picker(ui, running);
+            ui.end_row();
         });
 
         ui.add_space(6.0);
@@ -355,21 +403,25 @@ impl App {
 
     fn llama_start(&mut self) {
         let console = self.console.clone();
+        let state = self.coding.clone();
+        let ctx = self.llama_ctx();
         self.llama_job("starting router", move |url, model, exe| {
             if !llamacpp::status(&url)?.running {
-                llamacpp::start(&url, &exe, &console)?;
+                llamacpp::start(&url, &exe, ctx, &console)?;
+                state.lock().unwrap().llama.started_ctx = Some(ctx);
                 llamacpp::wait_until_up(&url, Duration::from_secs(120))?;
             }
             llamacpp::ensure_loaded(&url, &model, Duration::from_secs(300))?;
-            let config = coding::llama_cpp_apply(&model, &url)?;
+            let config = coding::llama_cpp_apply(&model, &url, ctx)?;
             Ok(format!("{} loaded on {url} - {config}", llamacpp::display_name(&model)))
         });
     }
 
     fn llama_load(&mut self) {
-        self.llama_job("loading model", |url, model, _| {
+        let ctx = self.llama_ctx();
+        self.llama_job("loading model", move |url, model, _| {
             llamacpp::ensure_loaded(&url, &model, Duration::from_secs(300))?;
-            let config = coding::llama_cpp_apply(&model, &url)?;
+            let config = coding::llama_cpp_apply(&model, &url, ctx)?;
             Ok(format!("{} loaded - {config}", llamacpp::display_name(&model)))
         });
     }
@@ -379,11 +431,17 @@ impl App {
     }
 
     pub(super) fn llama_stop(&mut self) {
-        self.llama_job("stopping router", |url, _, _| llamacpp::stop(&url));
+        let state = self.coding.clone();
+        self.llama_job("stopping router", move |url, _, _| {
+            let result = llamacpp::stop(&url);
+            state.lock().unwrap().llama.started_ctx = None;
+            result
+        });
     }
 
     fn llama_configure(&mut self) {
-        self.llama_job("setting up Pi/OpenCode", |url, model, _| coding::llama_cpp_apply(&model, &url));
+        let ctx = self.llama_ctx();
+        self.llama_job("setting up Pi/OpenCode", move |url, model, _| coding::llama_cpp_apply(&model, &url, ctx));
     }
 
     /// Asks the router for its models every couple of seconds (the Coding page and the tray tip use it).

@@ -3,8 +3,9 @@ rem Flow 3: coding LLM in T3 Code (OpenCode or Pi provider).
 rem   Default: free OpenCode Zen cloud model opencode/deepseek-v4.1-flash-free (no key, no GPU memory)
 rem   Other Zen model:    3-coding-llm-t3code.bat opencode/mimo-v2.6-flash-free
 rem   Local Ollama model: 3-coding-llm-t3code.bat qwen3:8b     (or gpt-oss:20b, qwen3-coder:30b, qwen3.8-blend:27b)
-rem   Tuned local model:  3-coding-llm-t3code.bat speed|quality   (local-coder:speed = qwen3:8b, 16k, no thinking;
-rem                       local-coder:quality = qwen3.8-blend:27b, 32k, thinking - set up in the GUI under Coding)
+rem   Tuned local model:  3-coding-llm-t3code.bat speed|quality|long   (local-coder:speed = qwen3:8b, 16k, no thinking;
+rem                       local-coder:quality = qwen3.8-blend:27b, 32k, thinking; local-coder:long = same, 200k context
+rem                       - set up in the GUI under Coding)
 rem   Terminal instead of T3 Code:  3-coding-llm-t3code.bat qwen3:8b cli
 rem   Pi coding agent (terminal):   3-coding-llm-t3code.bat qwen3.8-blend:27b pi   (local models in config\pi-models.json)
 rem   Pi in T3 Code: 3-coding-llm-t3code.bat qwen3.8-blend:27b, then provider Pi in the model picker
@@ -21,6 +22,7 @@ if /i "%MODEL:~0,9%"=="opencode/" (
 )
 if /i "%MODEL%"=="speed" set "MODEL=local-coder:speed"
 if /i "%MODEL%"=="quality" set "MODEL=local-coder:quality"
+if /i "%MODEL%"=="long" set "MODEL=local-coder:long"
 set "FULL=ollama/%MODEL%"
 
 curl.exe -s -o nul http://127.0.0.1:11434/ || (

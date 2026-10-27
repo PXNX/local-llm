@@ -17,15 +17,20 @@ use crate::sys;
 pub const URL_KEY: &str = "LLAMA_CPP_URL";
 pub const MODEL_KEY: &str = "LLAMA_CPP_MODEL";
 pub const EXE_KEY: &str = "LLAMA_CPP_EXE";
+pub const CTX_KEY: &str = "LLAMA_CPP_CTX";
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8080";
 pub const DEFAULT_MODEL: &str = "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M";
 
 /// The provider key in Pi's and OpenCode's config files.
 pub const PROVIDER: &str = "llama-cpp";
-/// Pi's model entry: what the Nemotron was loaded with (n_ctx 57344 of 65536 trained).
+/// Default context the router loads the model with (and Pi's model entry says): 57344 of the
+/// Nemotron's 65536 default. `LLAMA_CPP_CTX` raises it; the KV cache grows with it.
 pub const CONTEXT: u32 = 57_344;
 pub const MAX_TOKENS: u32 = 8_192;
+/// The choices offered in the GUI (any other value can be typed into .env).
+pub const CONTEXT_CHOICES: [u32; 7] = [16_384, 32_768, CONTEXT, 65_536, 131_072, 204_800, 262_144];
+const MIN_CONTEXT: u32 = 4_096;
 
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct Router {
@@ -76,6 +81,22 @@ pub fn model_id(value: &str) -> String {
     if v.is_empty() { DEFAULT_MODEL.to_owned() } else { v.to_owned() }
 }
 
+/// The context size from .env: plain tokens ("131072") or in k ("128k"); empty or too small falls back
+/// to the default.
+pub fn context(value: &str) -> u32 {
+    let v = value.trim().to_ascii_lowercase();
+    let tokens = match v.strip_suffix('k') {
+        Some(k) => k.trim().parse::<u32>().ok().and_then(|k| k.checked_mul(1024)),
+        None => v.parse::<u32>().ok(),
+    };
+    tokens.filter(|&t| t >= MIN_CONTEXT).unwrap_or(CONTEXT)
+}
+
+/// "57344" -> "56k", for labels.
+pub fn context_label(tokens: u32) -> String {
+    if tokens.is_multiple_of(1024) { format!("{}k", tokens / 1024) } else { tokens.to_string() }
+}
+
 /// The router's state: TCP first (a closed port is just "not running"), then `GET /v1/models`.
 pub fn status(base: &str) -> Result<Router, String> {
     let addr = address(base)?;
@@ -110,14 +131,17 @@ fn parse_models(body: &Value) -> Vec<Model> {
         .collect()
 }
 
-/// Starts `llama serve` without a console window. A router that is already up is left alone.
-pub fn start(base: &str, exe: &str, console: &crate::console::Shared) -> Result<(), String> {
+/// Starts `llama serve` without a console window, loading models with `ctx` tokens of context (a
+/// command-line `--ctx-size` also wins over a models preset). A router that is already up is left alone,
+/// so a changed context needs a stop first.
+pub fn start(base: &str, exe: &str, ctx: u32, console: &crate::console::Shared) -> Result<(), String> {
     if status(base)?.running {
         return Ok(());
     }
     let addr = address(base)?;
     let mut cmd = Command::new(if exe.trim().is_empty() { "llama" } else { exe.trim() });
     cmd.args(["serve", "--host", &addr.ip().to_string(), "--port", &addr.port().to_string(), "--models-max", "1"]);
+    cmd.args(["--ctx-size", &ctx.to_string()]);
     // Downloads (--hf-repo) go to HF_HOME, i.e. into the one models folder.
     for (key, value) in crate::paths::current_env() {
         cmd.env(key, value);
@@ -291,6 +315,15 @@ mod tests {
         assert_eq!(base_url("  "), DEFAULT_URL);
         assert_eq!(base_url("http://localhost:8080/"), "http://localhost:8080");
         assert_eq!(model_id(""), DEFAULT_MODEL);
+        assert_eq!(context(""), CONTEXT);
+        assert_eq!(context("131072"), 131_072);
+        assert_eq!(context(" 128K "), 131_072);
+        assert_eq!(context("200k"), 204_800);
+        assert_eq!(context("12"), CONTEXT, "too small to be a context");
+        assert_eq!(context("lots"), CONTEXT);
+        assert_eq!(context_label(57_344), "56k");
+        assert_eq!(context_label(5000), "5000");
+        assert!(CONTEXT_CHOICES.windows(2).all(|w| w[0] < w[1]));
         assert_eq!(address("http://127.0.0.1:8080").unwrap().port(), 8080);
         assert!(address("https://example.com").is_err());
         assert!(address("http://127.0.0.1:notaport").is_err());
