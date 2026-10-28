@@ -78,6 +78,10 @@ impl Profile {
     pub fn thinking(self) -> bool {
         self != Profile::Speed
     }
+    /// Output limit for the editors: thinking stops mid-thought at 8k ("length").
+    pub fn max_tokens(self) -> u32 {
+        if self.thinking() { 16384 } else { 8192 }
+    }
     /// Qwen3's recommended sampling: non-thinking mode for speed, thinking mode for quality.
     fn parameters(self) -> Value {
         let (temperature, top_p) = if self.thinking() { (0.6, 0.95) } else { (0.7, 0.8) };
@@ -246,7 +250,7 @@ fn opencode_entry(v: &mut Value, profile: Profile, base: &str) {
     }
     let mut entry = json!({
         "name": display_name(profile, base),
-        "limit": { "context": profile.num_ctx(), "output": 8192 },
+        "limit": { "context": profile.num_ctx(), "output": profile.max_tokens() },
     });
     if !profile.thinking() {
         // Ollama's OpenAI endpoint turns thinking off with reasoning_effort "none"
@@ -267,7 +271,7 @@ fn pi_entry(v: &mut Value, profile: Profile, base: &str) {
         "name": display_name(profile, base),
         "reasoning": true,
         "contextWindow": profile.num_ctx(),
-        "maxTokens": 8192,
+        "maxTokens": profile.max_tokens(),
     });
     if !profile.thinking() {
         let none: serde_json::Map<String, Value> =
@@ -385,6 +389,7 @@ mod tests {
         let mut pi = json!({});
         pi_entry(&mut pi, Profile::Long, "qwen3.8-blend:27b");
         assert_eq!(pi["providers"]["ollama"]["models"][0]["contextWindow"], 204800);
+        assert_eq!(pi["providers"]["ollama"]["models"][0]["maxTokens"], 16384);
         assert!(pi["providers"]["ollama"]["models"][0].get("thinkingLevelMap").is_none());
     }
 

@@ -405,9 +405,10 @@ impl App {
         let console = self.console.clone();
         let state = self.coding.clone();
         let ctx = self.llama_ctx();
+        let presets = self.repo.as_ref().map(|r| r.paths.script(llamacpp::PRESETS));
         self.llama_job("starting router", move |url, model, exe| {
             if !llamacpp::status(&url)?.running {
-                llamacpp::start(&url, &exe, ctx, &console)?;
+                llamacpp::start(&url, &exe, ctx, presets.as_deref(), &console)?;
                 state.lock().unwrap().llama.started_ctx = Some(ctx);
                 llamacpp::wait_until_up(&url, Duration::from_secs(120))?;
             }

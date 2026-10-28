@@ -11,7 +11,7 @@ setup.bat          & rem Ollama, OpenCode, Pi, ComfyUI portable + GGUF node + re
 0-download-all.bat & rem all models (~100 GB, resumable)
 ```
 Not in git (installed by the scripts): `ComfyUI_windows_portable/` and all models.
-The OpenCode config template is `config/opencode.json`, the Pi ones `config/pi-models.json` + `config/pi-settings.json` + `config/pi-ollama-schema-fix.ts`.
+The OpenCode config template is `config/opencode.json`, the Pi ones `config/pi-models.json` + `config/pi-settings.json` + the Pi extensions `config/pi-ollama-schema-fix.ts` and `config/pi-local-tools.ts`; OpenCode plugin `config/opencode-local-tools.ts`; llama.cpp router presets `config/llama-models.ini`.
 
 All models live in **one folder**: `MODELS_DIR` in `.env` (empty = `models\` in this folder; GUI: Settings > Model
 storage). ComfyUI's folders (`checkpoints\`, `diffusion_models\`, `text_encoders\`, `vae\` ...) sit directly in it,
@@ -363,8 +363,8 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code, pick the model under the
   OpenCode provider: `opencode/deepseek-v4.1-flash-free` (default) or `ollama/qwen3:8b` (or another one).
 - **Pi** ([pi coding agent](https://github.com/earendil-works/pi), bun global install, package
-  `@earendil-works/pi-coding-agent`): terminal agent, defaults to the local Nemotron on the llama.cpp router
-  (`llama-cpp/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M`); the JetBrains blend stays available as
+  `@earendil-works/pi-coding-agent`): terminal agent, defaults to the local Qwen3.6-35B-A3B MoE on the llama.cpp
+  router (`llama-cpp/byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S`); the JetBrains blend stays available as
   `ollama/qwen3.8-blend:27b` (thinking `low`). Config: `%USERPROFILE%\.pi\agent\models.json` (providers `llama-cpp`
   and `ollama`, OpenAI-compatible `/v1`, 32K context for Ollama like `OLLAMA_CONTEXT_LENGTH`) and `settings.json`;
   templates in `config\pi-*.json`.
@@ -381,17 +381,30 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   blend with a 204800-token context (`config\coder-long.Modelfile`, base `LLM_CODING_LONG_MODEL`). Its KV cache is
   ~7 GB at `q8_0`, on top of the ~12 GB weights, so on 16 GB RAM it swaps; use it when speed doesn't matter.
 - **llama.cpp router** (GUI > Coding, next to Ollama): `llama serve --host 127.0.0.1 --port 8080 --models-max 1`
-  runs hidden in the background and `POST /models/load` loads
-  `nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M` (OpenAI-compatible at http://127.0.0.1:8080/v1, 57K context).
+  `--models-preset config\llama-models.ini` runs hidden in the background and `POST /models/load` loads
+  `byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S` (OpenAI-compatible at http://127.0.0.1:8080/v1, 64K context).
+  `config\llama-models.ini` puts every model on the RTX only (`device = Vulkan1` - splitting onto the AMD iGPU or
+  leaving it to the default was 1-6 tokens/s) with Qwen's sampling (temperature 0.6; llama.cpp's default 0.8
+  garbles small models' tool calls). Measured with a real 19k-token Pi request: Qwen3.6-35B-A3B (MoE, 3B active,
+  attention + KV cache on the GPU, experts partly in RAM) 16 tokens/s at 64k, 11 at 96k, 4 at 128k; the dense
+  Qwen3-8B heretic 4.4 tokens/s at 16k (27 at 8k fully on the GPU - weights + KV cache don't fit 6 GB beyond that).
+  A `q8_0` KV cache made generation ~10x slower on Vulkan, so it stays f16.
   "Set up Pi + OpenCode" adds the `llama-cpp` provider to `%USERPROFILE%\.pi\agent\models.json` and
   `%USERPROFILE%\.config\opencode\opencode.json`, and enables `providerInstances.pi` in T3 Code's
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code pick provider **Pi**, model
-  `llama-cpp/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M`; Pi in a terminal: `pi --model llama-cpp/...`.
-  The context size is a picker on the Coding page (`LLAMA_CPP_CTX` in .env, default 57344; also `128k`, `200000`
+  `llama-cpp/byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S`; Pi in a terminal: `pi --model llama-cpp/...`.
+  The context size is a picker on the Coding page (`LLAMA_CPP_CTX` in .env, default 65536; also `96k`, `128k`
   ...): the GUI starts the router with `--ctx-size` and writes the same value to Pi's/OpenCode's model entry. A
   router that is already running keeps its context - Stop router, then Start router. A bigger context needs more RAM.
-  Nemotron calls tools fine (`finish_reason: tool_calls`), but a small model drifts in T3 Code: T3 adds 44
-  `mcp__t3-code__*` tools, ~19k tokens on top of Pi's ~1.5k. `config\pi-agents.md` (installed as
+  **Tools with local models**: T3 Code declares all its ~85 `mcp__t3-code__*` tools (~29k tokens of schemas) to
+  every `openai-completions` model, which is every local one. With Pi's ~3.5k system prompt that is ~33k tokens
+  before the task: the 8B heretic's 40k context had 1.9k left for the answer (it ran out while thinking, no tool
+  call), Ollama's 24k cut the prompt. `config\pi-local-tools.ts` (Pi extension, installed as
+  `%USERPROFILE%\.pi\agent\extensions\local-tools.ts`) keeps them behind `tool_search` for localhost providers:
+  only T3's `orchestrator_capabilities`, `delegate_task` and `task_status` stay declared, the model loads others on
+  demand. A fresh request is ~6k tokens instead of ~33k. OpenCode has no tool search, so
+  `config\opencode-local-tools.ts` (`%USERPROFILE%\.config\opencode\plugins\local-tools.ts`) drops T3's other
+  tools for the `llama-cpp` and `ollama` providers. Cloud models keep all of them. `config\pi-agents.md` (installed as
   `%USERPROFILE%\.pi\agent\AGENTS.md`) tells Pi models to explore the project with their tools before asking.
   Unload frees the VRAM again (`POST /models/unload`), Stop ends `llama serve` (also for a router started outside
   the GUI). `.env`: `LLAMA_CPP_MODEL`, `LLAMA_CPP_URL`, `LLAMA_CPP_EXE` (default `llama` from PATH). The same router
