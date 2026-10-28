@@ -98,6 +98,27 @@
             "context": 57344,
             "output": 8192
           }
+        },
+        "byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S": {
+          "name": "Qwen3.6-35B-A3B (MoE, 64k, fastest local)",
+          "limit": {
+            "context": 65536,
+            "output": 16384
+          }
+        },
+        "saidutta69/Qwen3-8B-heretic:Q4_K_M": {
+          "name": "Qwen3-8B heretic (abliterated, 32k, slow)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "empero-ai/Qwen3.8-35B-A3B-Distill-GGUF:Q3_K_M": {
+          "name": "Qwen3.8-35B-A3B Distill (MoE, 64k, newer, ~1/3 slower)",
+          "limit": {
+            "context": 65536,
+            "output": 16384
+          }
         }
       }
     }

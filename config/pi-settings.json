@@ -1,5 +1,5 @@
 {
   "defaultProvider": "llama-cpp",
-  "defaultModel": "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M",
+  "defaultModel": "byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S",
   "defaultThinkingLevel": "low"
 }

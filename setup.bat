@@ -58,6 +58,13 @@ rem Ollama rejects object tool schemas without "properties" (T3 Code's MCP tools
 mkdir "%USERPROFILE%\.pi\agent\extensions" 2>nul
 copy /y "%~dp0config\pi-ollama-schema-fix.ts" "%USERPROFILE%\.pi\agent\extensions\ollama-schema-fix.ts" >nul
 echo Installed %USERPROFILE%\.pi\agent\extensions\ollama-schema-fix.ts
+rem T3 Code declares ~85 MCP tools (~29k tokens) to local models, which overflows their context; these keep
+rem them behind tool_search (Pi) or drop them (OpenCode has no tool search) for llama.cpp and Ollama
+copy /y "%~dp0config\pi-local-tools.ts" "%USERPROFILE%\.pi\agent\extensions\local-tools.ts" >nul
+echo Installed %USERPROFILE%\.pi\agent\extensions\local-tools.ts
+mkdir "%USERPROFILE%\.config\opencode\plugins" 2>nul
+copy /y "%~dp0config\opencode-local-tools.ts" "%USERPROFILE%\.config\opencode\plugins\local-tools.ts" >nul
+echo Installed %USERPROFILE%\.config\opencode\plugins\local-tools.ts
 
 echo === ComfyUI portable %COMFY_VER% (~2 GB)
 if not exist "%PY%" (

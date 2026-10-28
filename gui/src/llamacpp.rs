@@ -5,6 +5,7 @@
 //! GET /v1/models lists what is loaded.
 
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -20,16 +21,21 @@ pub const EXE_KEY: &str = "LLAMA_CPP_EXE";
 pub const CTX_KEY: &str = "LLAMA_CPP_CTX";
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8080";
-pub const DEFAULT_MODEL: &str = "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M";
+/// Qwen3.6-35B-A3B: a MoE whose attention and KV cache fit the 6 GB GPU, ~16 tokens/s with 64k context here.
+/// The id is a section of config/llama-models.ini (the Hugging Face tag of the file is "80BPW").
+pub const DEFAULT_MODEL: &str = "byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S";
+/// Router presets (GPU, sampling, per-model context), relative to the repo.
+pub const PRESETS: &str = "config/llama-models.ini";
 
 /// The provider key in Pi's and OpenCode's config files.
 pub const PROVIDER: &str = "llama-cpp";
-/// Default context the router loads the model with (and Pi's model entry says): 57344 of the
-/// Nemotron's 65536 default. `LLAMA_CPP_CTX` raises it; the KV cache grows with it.
-pub const CONTEXT: u32 = 57_344;
-pub const MAX_TOKENS: u32 = 8_192;
+/// Default context the router loads the model with (and Pi's model entry says). `LLAMA_CPP_CTX` raises it;
+/// the KV cache grows with it. Pi's system prompt and tools take ~6k of it.
+pub const CONTEXT: u32 = 65_536;
+/// Thinking models stop mid-thought at 8k ("length").
+pub const MAX_TOKENS: u32 = 16_384;
 /// The choices offered in the GUI (any other value can be typed into .env).
-pub const CONTEXT_CHOICES: [u32; 7] = [16_384, 32_768, CONTEXT, 65_536, 131_072, 204_800, 262_144];
+pub const CONTEXT_CHOICES: [u32; 7] = [16_384, 32_768, CONTEXT, 98_304, 131_072, 204_800, 262_144];
 const MIN_CONTEXT: u32 = 4_096;
 
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -132,9 +138,9 @@ fn parse_models(body: &Value) -> Vec<Model> {
 }
 
 /// Starts `llama serve` without a console window, loading models with `ctx` tokens of context (a
-/// command-line `--ctx-size` also wins over a models preset). A router that is already up is left alone,
-/// so a changed context needs a stop first.
-pub fn start(base: &str, exe: &str, ctx: u32, console: &crate::console::Shared) -> Result<(), String> {
+/// command-line `--ctx-size` also wins over a models preset) and the settings in `presets` if it exists.
+/// A router that is already up is left alone, so a changed context needs a stop first.
+pub fn start(base: &str, exe: &str, ctx: u32, presets: Option<&Path>, console: &crate::console::Shared) -> Result<(), String> {
     if status(base)?.running {
         return Ok(());
     }
@@ -142,6 +148,9 @@ pub fn start(base: &str, exe: &str, ctx: u32, console: &crate::console::Shared) 
     let mut cmd = Command::new(if exe.trim().is_empty() { "llama" } else { exe.trim() });
     cmd.args(["serve", "--host", &addr.ip().to_string(), "--port", &addr.port().to_string(), "--models-max", "1"]);
     cmd.args(["--ctx-size", &ctx.to_string()]);
+    if let Some(p) = presets.filter(|p| p.is_file()) {
+        cmd.arg("--models-preset").arg(p);
+    }
     // Downloads (--hf-repo) go to HF_HOME, i.e. into the one models folder.
     for (key, value) in crate::paths::current_env() {
         cmd.env(key, value);
@@ -322,6 +331,7 @@ mod tests {
         assert_eq!(context("12"), CONTEXT, "too small to be a context");
         assert_eq!(context("lots"), CONTEXT);
         assert_eq!(context_label(57_344), "56k");
+        assert_eq!(context("56k"), 57_344);
         assert_eq!(context_label(5000), "5000");
         assert!(CONTEXT_CHOICES.windows(2).all(|w| w[0] < w[1]));
         assert_eq!(address("http://127.0.0.1:8080").unwrap().port(), 8080);
@@ -347,7 +357,7 @@ mod tests {
         assert_eq!(r.failed("g:h"), Some(3));
         assert_eq!(r.failed("a:b"), None);
         assert_eq!(r.loaded_names(), ["a:b"]);
-        assert_eq!(display_name(DEFAULT_MODEL), "NVIDIA-Nemotron-3.5-Bolt-E4B-4GB (Q4_K_M)");
+        assert_eq!(display_name(DEFAULT_MODEL), "Qwen3.6-35B-A3B-GGUF (Q4_K_S)");
         assert_eq!(display_name("plain"), "plain");
     }
 }
