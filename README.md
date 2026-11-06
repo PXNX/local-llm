@@ -385,14 +385,25 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   `byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S` (OpenAI-compatible at http://127.0.0.1:8080/v1, 64K context).
   `config\llama-models.ini` puts every model on the RTX only (`device = Vulkan1` - splitting onto the AMD iGPU or
   leaving it to the default was 1-6 tokens/s) with Qwen's sampling (temperature 0.6; llama.cpp's default 0.8
-  garbles small models' tool calls). Measured with a real 19k-token Pi request: Qwen3.6-35B-A3B (MoE, 3B active,
-  attention + KV cache on the GPU, experts partly in RAM) 16 tokens/s at 64k, 11 at 96k, 4 at 128k; the dense
-  Qwen3-8B heretic 4.4 tokens/s at 16k (27 at 8k fully on the GPU - weights + KV cache don't fit 6 GB beyond that).
-  A `q8_0` KV cache made generation ~10x slower on Vulkan, so it stays f16.
+  garbles small models' tool calls). Vulkan1 only exists in a current llama.cpp: `llama update` (build b12110 or
+  newer). The build before it listed the AMD iGPU alone, so `device = Vulkan1` silently fell back to the iGPU and
+  everything ran 3-6x slower (TwIL-8B: 9 instead of 85 tokens/s of prompt, 1.6 instead of 7.8 tokens/s) -
+  `llama serve --list-devices` shows which devices the router has. Measured with a real 19k-token Pi request:
+  Qwen3.6-35B-A3B (MoE, 3B active, attention + KV cache on the GPU, experts partly in RAM) 16 tokens/s at 64k,
+  11 at 96k, 4 at 128k; the dense Qwen3-8B heretic 4.4 tokens/s at 16k (27 at 8k fully on the GPU).
+  Dense 8-9B models don't fit 6 GB of VRAM with a usable context: ~5 GB of weights leave ~1 GB, and 64k of f16 KV
+  cache alone is 10.7 GB. So **TwIL-8B** (4.98 GB, 64k, 4.5 tokens/s) and **DeepSeek V4 Pro 9B heretic** (5.24 GB,
+  32k) of `mradermacher/...-i1-GGUF` run on the CPU with a `q8_0` KV cache (`n-gpu-layers = 0`); half-offloading
+  them measured 3.6 tokens/s, because attention then reads the KV cache over PCIe. A `q8_0` KV cache is only used
+  where it is needed: the "10x slower" measurement came from the runs on the iGPU, and at 64k it is what lets the
+  cache fit into RAM at all.
   "Set up Pi + OpenCode" adds the `llama-cpp` provider to `%USERPROFILE%\.pi\agent\models.json` and
   `%USERPROFILE%\.config\opencode\opencode.json`, and enables `providerInstances.pi` in T3 Code's
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code pick provider **Pi**, model
   `llama-cpp/byteshape/Qwen3.6-35B-A3B-GGUF:Q4_K_S`; Pi in a terminal: `pi --model llama-cpp/...`.
+  The Coding page's **Preset** picker lists the `[section]` names of `config\llama-models.ini` (each carries the
+  GPU layers, context and KV cache of that model); picking one writes `LLAMA_CPP_MODEL` to `.env`, so Start router
+  loads exactly that preset. The model id can still be typed by hand, e.g. for a GGUF that has no preset.
   The context size is a picker on the Coding page (`LLAMA_CPP_CTX` in .env, default 65536; also `96k`, `128k`
   ...): the GUI starts the router with `--ctx-size` and writes the same value to Pi's/OpenCode's model entry. A
   router that is already running keeps its context - Stop router, then Start router. A bigger context needs more RAM.
