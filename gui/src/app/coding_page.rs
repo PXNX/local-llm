@@ -197,6 +197,42 @@ impl App {
         }
     }
 
+    /// The models `config/llama-models.ini` offers, with the GPU layers, context and KV cache each one
+    /// needs. Picking one writes it to .env, so Start/Load uses those settings instead of the defaults.
+    fn llama_preset_picker(&mut self, ui: &mut egui::Ui, current: &str) {
+        let Some(path) = self.repo.as_ref().map(|r| r.paths.script(llamacpp::PRESETS)) else {
+            return;
+        };
+        let presets = llamacpp::presets(&path);
+        if presets.is_empty() {
+            ui.label(RichText::new("no presets found - type the model id below").small().weak());
+            return;
+        }
+        let mut pick = current.to_owned();
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("llama-preset")
+                .selected_text(llamacpp::display_name(current))
+                .width(300.0)
+                .show_ui(ui, |ui| {
+                    for id in &presets {
+                        ui.selectable_value(&mut pick, id.clone(), llamacpp::display_name(id));
+                    }
+                });
+            ui.label(RichText::new("from config/llama-models.ini - per model GPU layers, context and KV cache").small().weak());
+        });
+        if pick == current {
+            return;
+        }
+        self.env_edit.remove(llamacpp::MODEL_KEY);
+        self.save_env(&[(llamacpp::MODEL_KEY, pick)]);
+        {
+            let mut s = self.coding.lock().unwrap();
+            s.llama.polled = None;
+            s.llama.status = None;
+        }
+        self.poll_llama_router();
+    }
+
     /// Writes the text typed into the model/URL fields to .env, so the next action uses it.
     fn flush_llama_env(&mut self) {
         let values: Vec<(&'static str, String)> = {
@@ -278,6 +314,9 @@ impl App {
         ui.add_space(6.0);
 
         egui::Grid::new("llama-cpp-config").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            ui.label("Preset");
+            self.llama_preset_picker(ui, &model);
+            ui.end_row();
             let fields = [
                 ("Model", llamacpp::MODEL_KEY, model.clone(), llamacpp::DEFAULT_MODEL, 560.0f32),
                 ("Router URL", llamacpp::URL_KEY, url.clone(), llamacpp::DEFAULT_URL, 240.0f32),
@@ -341,6 +380,12 @@ impl App {
                 self.coding.lock().unwrap().llama.polled = None;
                 self.poll_llama_router();
             }
+            if ui::button_enabled(ui, idle, icons::DESKTOP_TOWER, "Devices")
+                .on_hover_text("what llama.cpp can offload to - the RTX has to show up as Vulkan1, or every preset runs on the iGPU and is 3-6x slower (`llama update` fixes that)")
+                .clicked()
+            {
+                clicked = Some(5);
+            }
         });
         if let Some(n) = clicked {
             self.flush_llama_env();
@@ -349,6 +394,7 @@ impl App {
                 1 => self.llama_load(),
                 2 => self.llama_unload(),
                 3 => self.llama_stop(),
+                5 => self.llama_devices(),
                 _ => self.llama_configure(),
             }
         }
@@ -443,6 +489,11 @@ impl App {
     fn llama_configure(&mut self) {
         let ctx = self.llama_ctx();
         self.llama_job("setting up Pi/OpenCode", move |url, model, _| coding::llama_cpp_apply(&model, &url, ctx));
+    }
+
+    /// Lists what llama.cpp can offload to; the presets need the RTX as Vulkan1.
+    fn llama_devices(&mut self) {
+        self.llama_job("listing llama.cpp devices", |_, _, exe| llamacpp::devices(&exe));
     }
 
     /// Asks the router for its models every couple of seconds (the Coding page and the tray tip use it).

@@ -164,7 +164,8 @@ mod tests {
         env.save().unwrap();
         let env = EnvFile::load(&path);
         assert_eq!(env.get("LOCAL_LLM_TEST_KEY"), "a b");
-        assert_eq!(env.get("OPENROUTER_API_KEY"), "sk-test");
+        // the file, not the process environment: a real OPENROUTER_API_KEY exported on the machine would win in get()
+        assert_eq!(env.values.get("OPENROUTER_API_KEY").map(String::as_str), Some("sk-test"));
         assert_eq!(std::fs::read_to_string(&path).unwrap().matches("OPENROUTER_API_KEY").count(), 1);
     }
 }

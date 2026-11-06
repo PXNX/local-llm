@@ -308,11 +308,46 @@ fn agent(timeout: Duration) -> ureq::Agent {
 /// The router this GUI started, so Stop only kills that one when it can.
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 
+/// `llama serve --list-devices`: what the router can offload to, as one line ("Vulkan0: AMD Radeon ...
+/// (16315 MiB, 15499 MiB free), Vulkan1: NVIDIA GeForce RTX 3060 ..."). Every preset says
+/// `device = Vulkan1`, so the RTX must show up here; an older llama.cpp (`llama update` fixes it) lists the
+/// AMD iGPU alone and the router silently runs on it, 3-6x slower.
+pub fn devices(exe: &str) -> Result<String, String> {
+    let mut cmd = Command::new(if exe.trim().is_empty() { "llama" } else { exe.trim() });
+    cmd.args(["serve", "--list-devices"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let out = sys::hide_window(&mut cmd).output().map_err(|e| format!("could not run llama.cpp ({e})"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let list: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("Available devices"))
+        .collect();
+    if list.is_empty() {
+        return Err(format!("llama.cpp listed no devices: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(list.join(", "))
+}
+
 /// A readable name from a Hugging Face repo id: "org/Name:Q4_K_M" -> "Name (Q4_K_M)".
 pub fn display_name(model: &str) -> String {
     let (path, quant) = model.split_once(':').unwrap_or((model, ""));
     let name = path.rsplit('/').next().unwrap_or(path);
     if quant.is_empty() { name.to_owned() } else { format!("{name} ({quant})") }
+}
+
+/// The model ids the router's preset file offers (`[section]` names, `[*]` is the shared defaults block),
+/// in file order. Empty when the file is missing - the GUI then just keeps the typed-in model id.
+pub fn presets(path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let inner = line.strip_prefix('[')?.split(']').next()?.trim();
+            (!inner.is_empty() && inner != "*").then(|| inner.to_owned())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -359,5 +394,20 @@ mod tests {
         assert_eq!(r.loaded_names(), ["a:b"]);
         assert_eq!(display_name(DEFAULT_MODEL), "Qwen3.6-35B-A3B-GGUF (Q4_K_S)");
         assert_eq!(display_name("plain"), "plain");
+    }
+
+    #[test]
+    fn preset_sections_are_the_model_ids() {
+        let dir = std::env::temp_dir().join(format!("local-llm-presets-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("llama-models.ini");
+        std::fs::write(
+            &file,
+            "; a comment\r\nversion = 1\r\n\r\n[*]\r\ndevice = Vulkan1\r\n\r\n[org/One:Q4_K_M]\r\nctx-size = 65536\r\n\r\n[org/Two:Q3_K_M]\r\nn-gpu-layers = 0\r\n",
+        )
+        .unwrap();
+        assert_eq!(presets(&file), ["org/One:Q4_K_M", "org/Two:Q3_K_M"]);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(presets(Path::new("does/not/exist.ini")).is_empty());
     }
 }
