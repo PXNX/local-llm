@@ -37,6 +37,9 @@ Conventions:
 ## Committing
 
 - Commit your own changes yourself, feature by feature: as soon as one self-contained piece of work is done (a new flow, a GUI page, a wired-up `.bat`), commit it before starting the next. Do not collect a whole task into one big commit at the end, and do not leave finished work uncommitted.
-- Each commit should build on its own and have a message that says what that feature does, with the area as prefix like the existing history: `GUI:`, `Comedy:`, `Coding:`, `CI:`.
+- Each commit should build on its own and have a message that says what that feature does, in the form `type(scope): what it does`, e.g. `fix(comedy): keep saved characters between sketches`.
+  - Types: `feat` (new behaviour), `fix` (broken behaviour repaired), `refactor` (same behaviour, different code), `docs` (README, `AGENTS.md`, `CLAUDE.md`, comments), `chore` (build, deps, batch files, config, releases, cleanup).
+  - Scopes: the area of the repo - a flow folder (`comedy`, `img2video`, `stickers`, `characters`, `caricatures`, `vectorize`, `soundfx`, `topvideos`), `gui`, `coding`, `models`, `common`, `config`, `release`, `ci`, `deps`, `docs`.
+  - Lowercase after the colon, no trailing period, imperative ("add", "fix", "drop"), one line. Put the *why* in the body when it is not obvious.
 - Author and committer are `PXNX <loool1912@web.de>` (`git config --local user.name/user.email`). Never let another identity leak into history; if a commit shows the wrong author, rewrite it instead of leaving it.
 - The rules from "Concurrent sessions" still apply to every one of these commits.

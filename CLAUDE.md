@@ -28,3 +28,5 @@ The same rules, spelled out for every agent, live in `AGENTS.md` - keep both in 
   `.github/workflows/gui.yml` publishes the GitHub release: every push to main whose `gui/Cargo.toml` version
   has no release yet gets one (tagged there if needed) - never upload one by hand.
 - Line endings follow `.gitattributes` (`.bat` CRLF, everything else LF).
+- Commit messages: `type(scope): what it does`, types `feat`, `fix`, `refactor`, `docs`, `chore`, e.g.
+  `fix(comedy): keep saved characters between sketches`; author and committer `PXNX <loool1912@web.de>`.
