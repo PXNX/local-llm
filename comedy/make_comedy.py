@@ -1,6 +1,7 @@
 """Political comedy cartoon sketches in the style of freeonis: an LLM writes the sketch, the other
 flows provide the cast (caricatures from flow 7, objects from flow 8, optionally the screenshots of
-flow 6, sounds of flows 5 and 9), Kokoro speaks the lines and everything is animated as a cutout
+flow 6, sounds of flows 5 and 9), Kokoro (or Audio8-TTS / Breeze TTS 2, --voice-engine) speaks the lines and
+everything is animated as a cutout
 cartoon: squash & stretch while talking, cuts between wide shots and close-ups, entrances, jumps,
 falls, drones hitting refineries, explosions, subtitles, an end card.
 
@@ -105,7 +106,8 @@ def main():
                     help="how a character talks and behaves (repeatable), e.g. --personality \"Trump=boastful, "
                     "repeats himself\" - shapes the dialogue and the voice; kept in script.json")
     ap.add_argument("--lang", default="English", help="dialogue language (default English; Kokoro: English, Spanish, "
-                    "French, Italian, Portuguese, Hindi, Japanese, Chinese - others use the Windows voices)")
+                    "French, Italian, Portuguese, Hindi, Japanese, Chinese - others use the Windows voices, or "
+                    "--voice-engine hf with Audio8-TTS for 23 languages)")
     ap.add_argument("--seconds", type=int, default=60, help="rough length of the sketch (default 60)")
     ap.add_argument("--preview", action="store_true", help="quick 480p 30 fps render (default: 1080p 60 fps)")
     ap.add_argument("--format", choices=["landscape", "vertical"], default="landscape",
@@ -120,7 +122,13 @@ def main():
     ap.add_argument("--no-library", action="store_true", help="ignore the saved characters and backgrounds")
     ap.add_argument("--new-backgrounds", action="store_true", help="draw the backgrounds again instead of "
                     "reusing the saved ones of comedy/library/scenes (the new ones replace them)")
-    ap.add_argument("--voice-engine", choices=["auto", "kokoro", "sapi"], default="auto")
+    ap.add_argument("--voice-engine", choices=["auto", "kokoro", "sapi", "hf", "breeze"], default="auto",
+                    help="auto = Kokoro for English/Spanish/French/Italian/Portuguese/Hindi/Japanese/Chinese, else the "
+                         "Windows voices; hf = a Hugging Face TTS checkpoint on the GPU (--tts-model), breeze = "
+                         "Breeze TTS 2 voice design")
+    ap.add_argument("--tts-model", default=None,
+                    help="voice model for --voice-engine hf: audio8 (default, Audio8-TTS-Realistic-Air, 23 languages), "
+                         "breeze, or any Hugging Face repo id of a transformers text-to-speech model")
     ap.add_argument("--music", choices=["auto", "calm", "funny", "none"], default="auto",
                     help="quiet music bed: auto = fits each scene (the script's per-scene mood: deadpan, bouncy, "
                     "tense, pompous, sad, sneaky, triumphant, none - default); calm/funny/none = one bed for the "
@@ -180,7 +188,7 @@ def main():
     print(writer.as_text(script))
 
     # ---- 3a. voices first: they don't need the GPU and fix the cast's voices in script.json
-    voices = voice.Voices(script["lang"], args.voice_engine)
+    voices = voice.Voices(script["lang"], args.voice_engine, args.tts_model)
     voices.assign(script["cast"], llm)
     tmp_script = folder / "script.json.tmp"  # never a half-written script.json, also when cancelled right now
     tmp_script.write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -254,6 +262,7 @@ def main():
         voices.say, W, H, fps, end_card=not args.no_end_card, subtitles=not args.no_subtitles,
         handle=args.handle, seed=script["seed"], bg_paths={k: (str(v) if v else None) for k, v in bg_paths.items()})
     plan["rig"] = args.limbs
+    voices.unload()  # a GPU voice model must not keep the VRAM the renderers and ComfyUI need
     print(f"[plan   ] {plan['total']:.1f} s, {len(plan['scenes'])} scenes, {W}x{H} @ {fps} fps")
 
     # ---- 5. sound

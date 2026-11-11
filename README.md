@@ -17,7 +17,7 @@ All models live in **one folder**: `MODELS_DIR` in `.env` (empty = `models\` in 
 storage). ComfyUI's folders (`checkpoints\`, `diffusion_models\`, `text_encoders\`, `vae\` ...) sit directly in it,
 the other tools in subfolders: `ollama\` (`OLLAMA_MODELS`), `huggingface\` (`HF_HOME`: OWLv2 + CLIP of the characters
 flow and the llama.cpp router's GGUFs), `torch\` (`TORCH_HOME`: Demucs), `u2net\` (`U2NET_HOME`: rembg), `kokoro\`
-(comedy voices). Every `.bat` calls
+(comedy voices) and `tts\` (the GPU voice models of the comedy flow, one folder per checkpoint). Every `.bat` calls
 `common\models-env.bat`, the Python flows `common/storage.py` (via `import common`), and the GUI passes the same
 variables to Ollama, ComfyUI and the flows; `start-comfyui.bat` starts ComfyUI with `--models-directory` and still
 finds files left in `ComfyUI\models` (`config/comfyui-old-models.yaml`). `setup.bat` and the GUI also save
@@ -223,7 +223,8 @@ dragged into ComfyUI); the 5B fp16 model is bigger than the 6 GB VRAM and gets o
 - `--no-generate` never draw in ComfyUI (placeholders for missing drawings), `--use-screenshots` fall back to the flow-6
   screenshots of the channel - those are freeonis' own character designs, fine for testing, not for publishing
 - `--music calm|funny|none` quiet music bed that ducks under the dialogue, `--no-subtitles`, `--no-end-card`, `--handle @mychannel`
-- `--voice-engine kokoro|sapi`, `--workers 6` parallel render processes, `--seed 42`
+- `--voice-engine auto|kokoro|sapi|hf|breeze`, `--tts-model audio8|<hf-repo-id>` (voice model for `hf`: Audio8-TTS,
+  Breeze TTS 2, or any transformers text-to-speech checkpoint), `--workers 6` parallel render processes, `--seed 42`
 
 Pipeline: the text LLM (`common/llm.py`: OpenRouter, or local Ollama - set `OLLAMA_TEXT_MODEL=qwen3:8b` in `.env`, it
 writes better jokes than the default vision model) writes the sketch as JSON: cast, scenes (background: `plain`,
@@ -237,6 +238,14 @@ sets like `caricatures\out\ww3\<thing>\cutout.png`); missing ones are drawn with
 `caricatures/make_caricatures.py` when ComfyUI runs and saved there for the next sketch, other backgrounds too
 (`comedy\cache\bg\`). Kokoro-82M (ONNX on the CPU, ~350 MB downloaded once to the models folder's `kokoro\`) gives every character
 its own voice and pitch (languages Kokoro can't speak use the Windows voices), lines are cached in `comedy\cache\tts\`.
+Stronger voices come from `--voice-engine hf` (Audio8-TTS-Realistic-Air: 0.6B, 23 languages incl. German, ~2.6 GB in
+`tts\`, CUDA or CPU, one timbre per character through its own sampling seed) and `--voice-engine breeze` (Breeze TTS 2:
+English/Chinese voice design from a natural-language instruction built out of the character's personality; its weights
+are ~7.6 GB, research/non-commercial, and it wants a 12 GB GPU plus `github.com/breezeblue-ai/breeze-tts` cloned to
+`tts\breeze-tts`). Any other `transformers` text-to-speech checkpoint works with `--voice-engine hf --tts-model <repo id>`
+and downloads itself into `tts\<repo>`. A GPU voice model is unloaded before the renderers start; on a 6 GB RTX 3060
+laptop Audio8-TTS needs ~13 s to load and then about 6 s of GPU time per second of speech (lines are cached afterwards,
+so a 60 s sketch spends ~6 min in the voice step).
 The renderer animates it as a cutout cartoon: squash & stretch driven by the voice, idle breathing, hard cuts
 with a slow push-in, screen shake, cartoon fireballs, flames and smoke. Frames are drawn in parallel processes
 and encoded with x264 (1080p: `medium`, CRF 18; preview: `veryfast`, CRF 26), then joined with the mixed sound into

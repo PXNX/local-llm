@@ -3,12 +3,18 @@
 kokoro (default): Kokoro-82M (ONNX, CPU), ~20 English voices plus a few other languages; the two
 model files (~350 MB) are downloaded once into the models folder's kokoro/ (common/storage.py).
 sapi: the voices built into Windows (David, Zira, Hedda ...) - used for languages Kokoro can't speak.
+hf: a Hugging Face text-to-speech checkpoint run through transformers (--tts-model), TTS_MODELS below
+lists the well-known ones - Audio8-TTS-Realistic-Air (0.6B, 23 languages, ~2.6 GB, CUDA) by default.
+breeze: Breeze TTS 2 (~7.6 GB, English/Chinese voice design) - needs its own inference repo and a
+12 GB GPU, see TTS_MODELS["breeze"]["note"].
 Each character gets its own voice and pitch; lines are cached in comedy/cache/tts/. KNOWN hand-picks
 voice+pitch for a handful of famous names; for everyone else assign() can ask the LLM for a pitch/speed
 that fits how the character actually sounds (optional, best effort, never required).
 """
+import gc
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -49,6 +55,34 @@ KOKORO_LANGS = {
 }
 VOICE_LANG = {"a": "en-us", "b": "en-gb", "e": "es", "f": "fr-fr", "i": "it", "p": "pt-br", "h": "hi", "j": "ja",
               "z": "cmn"}
+
+# Text-to-speech models a sketch can use: --voice-engine hf --tts-model <key>, or any HF repo id.
+# kind: kokoro (onnx, CPU), hf (transformers + trust_remote_code), breeze (BreezeBlue's own repo).
+# langs: what the model actually speaks - a language outside the list is refused instead of guessed.
+# gpu: VB of VRAM it needs, rough; the weights land in the models folder under dir.
+TTS_MODELS = {
+    "audio8": {
+        "name": "Audio8-TTS-Realistic-Air", "kind": "hf", "repo": "Edge0/Audio8-TTS-Realistic-Air",
+        "dir": "tts/Audio8-TTS-Realistic-Air", "gpu": 4, "license": "Apache-2.0",
+        "langs": {"english", "chinese", "cantonese", "japanese", "korean", "german", "french", "spanish", "italian",
+                  "portuguese", "dutch", "polish", "russian", "hindi", "arabic", "finnish", "indonesian", "malay",
+                  "norwegian", "swedish", "thai", "turkish", "vietnamese"},
+        "note": "0.6B, 44.1 kHz, zero-shot cloning; each character gets its own sampling seed as its voice",
+    },
+    "breeze": {
+        "name": "Breeze-TTS-2", "kind": "breeze", "repo": "BreezeBlue/Breeze-TTS-2",
+        "dir": "tts/Breeze-TTS-2", "gpu": 12, "license": "research / non-commercial",
+        "langs": {"english", "chinese"},
+        "note": "English/Chinese voice design with a natural-language instruction; needs a 12 GB GPU and the "
+                "inference code from github.com/breezeblue-ai/breeze-tts (clone it to models/tts/breeze-tts or "
+                "set TTS_BREEZE_DIR)",
+    },
+}
+TTS_ALIASES = {"audio8-tts": "audio8", "audio8-tts-realistic-air": "audio8", "Edge0/Audio8-TTS-Realistic-Air": "audio8",
+               "breeze-tts-2": "breeze", "BreezeBlue/Breeze-TTS-2": "breeze"}
+# what a character's voice seed can be, so two characters never sound the same with a reference-less model
+VOICE_SEEDS = ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8"]
+
 SAPI_CULTURE = {"german": "de", "english": "en", "french": "fr", "spanish": "es", "italian": "it", "polish": "pl",
                 "dutch": "nl", "portuguese": "pt", "russian": "ru", "ukrainian": "uk", "japanese": "ja", "chinese": "zh"}
 # well-known characters, English: (voice, semitones) - hand-picked after listening, takes priority
@@ -184,16 +218,25 @@ def tidy(audio, sr=SR):
 
 
 class Voices:
-    def __init__(self, lang="English", engine="auto"):
+    def __init__(self, lang="English", engine="auto", tts_model=None):
         self.lang = lang.strip().lower()
         self.kokoro = None
         self.sapi = []
-        if engine in ("auto", "kokoro") and self.lang in KOKORO_LANGS:
-            self.engine = "kokoro"
-        elif engine == "kokoro":
+        self.model = None
+        self.processor = None
+        self.device = None
+        if tts_model or engine in ("hf", "breeze"):
+            key, spec = tts_spec(tts_model or ("audio8" if engine == "hf" else "breeze"))
+            if spec.get("langs") and self.lang not in spec["langs"]:
+                raise SystemExit(f"{spec['name']} can't speak {lang}; it speaks: "
+                                 f"{', '.join(sorted(spec['langs']))} (or pick another --voice-engine)")
+            self.engine, self.key, self.spec = spec["kind"], key, spec
+        elif engine == "kokoro" and self.lang not in KOKORO_LANGS:
             raise SystemExit(f"Kokoro can't speak {lang}; supported: {', '.join(KOKORO_LANGS)} (or --voice-engine sapi)")
+        elif engine in ("auto", "kokoro") and self.lang in KOKORO_LANGS:
+            self.engine, self.key, self.spec = "kokoro", "kokoro", None
         else:
-            self.engine = "sapi"
+            self.engine, self.key, self.spec = "sapi", "sapi", None
             self.sapi = sapi_voices()
             culture = SAPI_CULTURE.get(self.lang, self.lang[:2])
             matching = [v for v in self.sapi if v[1].lower().startswith(culture)]
@@ -203,7 +246,11 @@ class Voices:
             self.sapi = matching or self.sapi
 
     def label(self):
-        return "Kokoro-82M" if self.engine == "kokoro" else "Windows SAPI"
+        if self.engine == "kokoro":
+            return "Kokoro-82M"
+        if self.engine == "sapi":
+            return "Windows SAPI"
+        return f"{self.spec['name']} ({self.device or 'GPU'})"
 
     def assign(self, cast, llm=None):
         """Fills voice/pitch into each cast member that has none (a script.json may set them).
@@ -221,8 +268,12 @@ class Voices:
                     if known and self.lang == "english" and known[0] not in used:
                         m["voice"] = known[0]
                         m.setdefault("pitch", known[1])
-                else:
+                elif self.engine == "sapi":
                     pool = [v[0] for v in self.sapi if v[2].lower() == m["gender"]] or [v[0] for v in self.sapi] or [""]
+                else:
+                    # one sampling seed per character: a reference-less model can't be told a gender, the
+                    # different timbres plus the pitch offset below keep them apart
+                    pool = VOICE_SEEDS
                 if "voice" not in m:
                     free = [v for v in pool if v not in used]
                     m["voice"] = free[0] if free else pool[i % len(pool)]
@@ -239,7 +290,7 @@ class Voices:
 
     def say(self, text, member):
         """Mono float32 audio at 44.1 kHz, cached."""
-        spec = {"t": text, "e": self.engine, "v": member.get("voice"), "p": member.get("pitch", 0),
+        spec = {"t": text, "e": self.engine, "m": self.key, "v": member.get("voice"), "p": member.get("pitch", 0),
                 "s": member.get("speed", 1.0), "l": self.lang}
         key = hashlib.sha1(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:20]
         path = CACHE / f"{key}.wav"
@@ -249,8 +300,12 @@ class Voices:
         speed = max(0.5, min(2.0, float(spec["s"]) / ratio))
         if self.engine == "kokoro":
             audio, sr = self._kokoro(text, spec["v"], speed)
-        else:
+        elif self.engine == "sapi":
             audio, sr = self._sapi(text, spec["v"], speed)
+        elif self.engine == "breeze":
+            audio, sr = self._breeze(text, member)
+        else:
+            audio, sr = self._hf(text, spec["v"], member)
         audio = resample(audio, sr * ratio, SR)
         audio = tidy(audio)
         CACHE.mkdir(parents=True, exist_ok=True)
@@ -279,3 +334,108 @@ class Voices:
             if r.returncode or not out.exists():
                 raise RuntimeError(f"Windows speech failed: {r.stderr[-500:]}")
             return read_wav(out)
+
+    def _load_hf(self):
+        """Loads the checkpoint from the models folder (downloaded once) - CUDA in bf16, else CPU."""
+        if self.model is not None:
+            return
+        path = storage.path(self.spec["dir"])
+        if not (path / "config.json").exists():
+            _download_repo(self.spec["repo"], path, self.spec["name"])
+        import torch
+        from transformers import AutoModel, AutoProcessor
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+        print(f"[voice  ] loading {self.spec['name']} on {self.device.upper()} ({path}) ...", flush=True)
+        self.processor = AutoProcessor.from_pretrained(str(path), trust_remote_code=True)
+        try:
+            self.model = AutoModel.from_pretrained(str(path), trust_remote_code=True, dtype=dtype)
+        except TypeError:  # transformers before 4.56 calls it torch_dtype
+            self.model = AutoModel.from_pretrained(str(path), trust_remote_code=True, torch_dtype=dtype)
+        self.model = self.model.eval().to(self.device)
+        print(f"[voice  ] {self.spec['name']} ready", flush=True)
+
+    def _hf(self, text, voice, member):
+        """Text-to-speech through transformers' own TTS interface (generate -> decode_audio), so any
+        checkpoint that ships AutoModel/AutoProcessor custom code works - Audio8-TTS is the reference.
+        Without reference audio a model speaks one fixed timbre, so every character gets its own seed."""
+        self._load_hf()
+        import torch
+        seed = int(hashlib.sha1(f"{self.key}:{voice}".encode()).hexdigest()[:8], 16)
+        torch.manual_seed(seed)
+        if self.device == "cuda":
+            torch.cuda.manual_seed_all(seed)
+        inputs = self.processor(text=[text.replace("\n", " ")], return_tensors="pt")
+        inputs = {k: (v.to(self.device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+        seconds = max(2.0, len(text.split()) / 2.4)
+        with torch.inference_mode():
+            out = self.model.generate(**inputs, max_new_tokens=int(60 + 28 * seconds), temperature=0.85,
+                                      top_p=0.95, top_k=50, do_sample=True, return_dict_in_generate=True)
+            wavs, lengths = self.model.decode_audio(out.codes)
+        audio = wavs[0, : int(lengths[0])].float().cpu().numpy().astype(np.float32)
+        return audio, int(self.model.config.codec_sample_rate)
+
+    def _breeze(self, text, voice, member):
+        """Breeze TTS 2 shipped as its own repo (not transformers): voice design from an instruction."""
+        root = Path(os.environ.get("TTS_BREEZE_DIR") or storage.path("tts/breeze-tts"))
+        infer = root / "infer.py"
+        if not infer.exists():
+            raise SystemExit(f"Breeze TTS 2 needs its inference code: git clone https://github.com/breezeblue-ai/"
+                             f"breeze-tts \"{root}\" (or set TTS_BREEZE_DIR). {self.spec['note']}")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.wav"
+            r = subprocess.run([sys.executable, str(infer), str(storage.path(self.spec["dir"])),
+                                "--text", text.replace("\n", " "), "--instruction", breeze_instruction(member),
+                                "--cfg-scale", "4", "--output", str(out)],
+                               cwd=str(root), capture_output=True, text=True, timeout=1800)
+            if r.returncode or not out.exists():
+                raise RuntimeError(f"Breeze TTS failed: {(r.stderr or r.stdout)[-600:]}")
+            return read_wav(out)
+
+    def unload(self):
+        """Frees the VRAM again, so ComfyUI can draw and the renderers get the card."""
+        if self.model is None:
+            return
+        self.model = self.processor = None
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+def breeze_instruction(member):
+    """The natural-language voice design Breeze TTS 2 wants, from the character's gender/personality."""
+    woman = member.get("gender") == "female"
+    personality = (member.get("personality") or "").strip().rstrip(".")
+    if personality:
+        return (f"A {'woman' if woman else 'man'} whose voice fits this personality: {personality}. "
+                f"Natural and believable on stage, clearly articulated, comedic timing.")
+    return f"A {'warm' if woman else 'deep'} {'female' if woman else 'male'} voice, natural and clearly articulated."
+
+
+def tts_spec(name):
+    """(key, spec) for a TTS_MODELS entry, an alias, or any Hugging Face repo id."""
+    key = TTS_ALIASES.get(name, name or "audio8")
+    if key in TTS_MODELS:
+        return key, TTS_MODELS[key]
+    if "/" in key:  # any transformers TTS checkpoint: same loader, same folder
+        return key, {"name": key, "kind": "hf", "repo": key, "dir": f"tts/{key.replace('/', '--')}", "gpu": 0,
+                     "langs": None, "note": "custom transformers code, loaded with trust_remote_code"}
+    raise SystemExit(f"unknown TTS model {name!r}; known: {', '.join(TTS_MODELS)} - or pass a Hugging Face repo id")
+
+
+def _download_repo(repo, target, label=None):
+    """Snapshot of a Hugging Face model into the models folder, with progress (once)."""
+    print(f"[dl   ] {label or repo} (once) -> {target}", flush=True)
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        raise SystemExit("huggingface_hub is missing - setup.bat installs it with ComfyUI's requirements")
+    snapshot_download(repo_id=repo, local_dir=str(target),
+                      ignore_patterns=["*.md", "*.pdf", "assets/*", "*.jpeg", "*.jpg", "*.png", "*.svg",
+                                       ".gitattributes"])
+    print(f"[dl   ] {label or repo} done", flush=True)

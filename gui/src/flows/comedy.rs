@@ -11,6 +11,14 @@ use crate::ui;
 
 const SCRIPTS: (&str, &[&str]) = ("Sketch script", &["json"]);
 const CHARACTERS_TIP: &str = "empty = the LLM picks 2-3 fitting leaders; a picture (e.g. from the Characters flow) is used instead of a caricature; personality (how they talk and act) shapes the dialogue, voice and animation";
+/// Models of the GPU voice engines in models.json (`--voice-engine hf` / `breeze`).
+const AUDIO8: &[&str] = &["audio8-config", "audio8-generation-config", "audio8-model", "audio8-codec",
+    "audio8-tokenizer", "audio8-tokenizer-config", "audio8-special-tokens", "audio8-preprocessor",
+    "audio8-processor-config", "audio8-configuration", "audio8-modeling", "audio8-modeling-codec",
+    "audio8-processing"];
+const BREEZE: &[&str] = &["breeze-config", "breeze-generation-config", "breeze-index", "breeze-model1",
+    "breeze-model2", "breeze-audio-tokenizer", "breeze-audio-config", "breeze-tokenizer", "breeze-tokenizer-config",
+    "breeze-special-tokens"];
 
 /// Flow 12: political comedy cartoon sketches (comedy/make_comedy.py).
 #[derive(Serialize, Deserialize)]
@@ -44,6 +52,8 @@ pub struct Comedy {
     end_card: bool,
     handle: String,
     voice_engine: String,
+    /// --tts-model: which Hugging Face TTS checkpoint --voice-engine hf runs.
+    tts_model: String,
     workers: u32,
     seed: Option<i64>,
     out: String,
@@ -75,6 +85,7 @@ impl Default for Comedy {
             end_card: true,
             handle: String::new(),
             voice_engine: "auto".into(),
+            tts_model: String::new(),
             workers: 0,
             seed: None,
             out: String::new(),
@@ -117,7 +128,7 @@ impl Flow for Comedy {
                 w::label(ui, "Characters", CHARACTERS_TIP);
                 self.cast_rows(ui, root);
                 ui.end_row();
-                w::label(ui, "Language", "Kokoro voices: English, Spanish, French, Italian, Portuguese, Hindi, Japanese, Chinese; others use the Windows voices");
+                w::label(ui, "Language", "Kokoro voices: English, Spanish, French, Italian, Portuguese, Hindi, Japanese, Chinese; others use the Windows voices (Audio8-TTS below covers 23 languages, incl. German)");
                 w::language(ui, "comedy-lang", &mut self.lang);
                 ui.end_row();
                 w::label(ui, "Length", "rough target");
@@ -190,14 +201,20 @@ impl Flow for Comedy {
         });
         egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
             w::form(ui, "comedy-adv", |ui| {
-                w::label(ui, "Voices", "");
+                w::label(ui, "Voices", "auto = Kokoro (CPU) for English/Spanish/French/Italian/Portuguese/Hindi/Japanese/Chinese, else the Windows voices; the GPU models give every character a timbre of its own");
                 w::choice(
                     ui,
                     "comedy-voice",
                     &mut self.voice_engine,
-                    &[("auto", "auto"), ("kokoro", "Kokoro-82M"), ("sapi", "Windows voices")],
+                    &[("auto", "auto"), ("kokoro", "Kokoro-82M"), ("sapi", "Windows voices"),
+                      ("hf", "Audio8-TTS (GPU, 23 languages)"), ("breeze", "Breeze TTS 2 (12 GB GPU)")],
                 );
                 ui.end_row();
+                if self.voice_engine == "hf" {
+                    w::label(ui, "Voice model", "empty = Audio8-TTS-Realistic-Air; any Hugging Face repo id of a transformers text-to-speech model works too and downloads itself into the models folder");
+                    ui.add(egui::TextEdit::singleline(&mut self.tts_model).hint_text("Audio8-TTS-Realistic-Air"));
+                    ui.end_row();
+                }
                 w::label(ui, "Render workers", "0 = half the CPU threads (max 6)");
                 ui.add(egui::DragValue::new(&mut self.workers).range(0..=16));
                 ui.end_row();
@@ -265,6 +282,9 @@ impl Flow for Comedy {
         if self.voice_engine != d.voice_engine {
             opt(&mut a, "--voice-engine", &self.voice_engine);
         }
+        if self.voice_engine == "hf" && !self.tts_model.trim().is_empty() {
+            opt(&mut a, "--tts-model", self.tts_model.trim());
+        }
         if self.workers > 0 {
             a.extend(["--workers".into(), self.workers.to_string()]);
         }
@@ -280,8 +300,17 @@ impl Flow for Comedy {
         if !self.from_script {
             n.llm(llm);
         }
-        if !(self.write_only && !self.from_script) && self.voice_engine != "sapi" {
-            n.models.extend(["kokoro-onnx".to_string(), "kokoro-voices".to_string()]);
+        if !(self.write_only && !self.from_script) {
+            match self.voice_engine.as_str() {
+                "sapi" => {}
+                "breeze" => n.models.extend(BREEZE.iter().map(|m| m.to_string())),
+                "hf" if self.tts_model.trim().is_empty() => {
+                    n.models.extend(AUDIO8.iter().map(|m| m.to_string()));
+                }
+                // any other Hugging Face id downloads itself into the models folder
+                "hf" => {}
+                _ => n.models.extend(["kokoro-onnx".to_string(), "kokoro-voices".to_string()]),
+            }
         }
         if self.draw_missing && !(self.write_only && !self.from_script) {
             n.comfy(FLUX1);

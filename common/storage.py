@@ -7,6 +7,7 @@ ComfyUI's model folders directly and the other tools' stores in subfolders:
   torch/        TORCH_HOME  (torch hub: Demucs in soundfx/)
   u2net/        U2NET_HOME  (rembg cutouts)
   kokoro/       Kokoro TTS voices (comedy/)
+  tts/          GPU voice models of the comedy flow, one folder per checkpoint (--voice-engine hf/breeze)
 `import common` calls route(), so the libraries download there instead of the user profile.
 """
 import os
