@@ -1,7 +1,10 @@
 """Draws the plan frame by frame (a pure function of time) and encodes it in parallel: the timeline
 is split into chunks, each worker process pipes raw frames into its own ffmpeg (H.264), the chunks
 are joined without re-encoding and the mixed audio is added."""
+import hashlib
+import json
 import math
+import os
 import random
 import subprocess
 import sys
@@ -589,11 +592,12 @@ def _chunk(job):
     a, b, path, venc = job
     p = _worker.p
     W, H, fps = p["W"], p["H"], p["fps"]
+    part = path.with_suffix(".part")  # renamed when complete, so a cancelled run never leaves a broken chunk
     cmd = [top5.FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
            "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
            "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p", *venc,
            "-g", str(fps * 2), "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-           "-r", str(fps), str(path)]
+           "-r", str(fps), "-f", "mp4", str(part)]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         for i in range(a, b):
@@ -601,38 +605,82 @@ def _chunk(job):
         proc.stdin.close()
     except BrokenPipeError:
         pass
+    except BaseException:
+        proc.kill()
+        raise
     err = proc.stderr.read().decode(errors="replace")
     if proc.wait():
         raise RuntimeError(f"ffmpeg failed: {err[-1500:]}")
+    os.replace(part, path)
     return b - a
 
 
-def encode(plan, audio_wav, out, workers, preset, crf, tmp):
-    """Renders all frames into out (MP4, H.264 + AAC)."""
+def _stamp(path):
+    """Changes when a drawing is replaced by another one under the same name."""
+    try:
+        st = os.stat(path)
+        return [str(path), st.st_size, st.st_mtime_ns]
+    except (OSError, TypeError):
+        return [str(path), 0, 0]
+
+
+def _scene_keys(plan, venc):
+    """One hash per scene of everything its frames are drawn from: the scene, its lines, the drawings
+    (path, size, date), the look of the whole video and this renderer's code."""
+    code = hashlib.sha1(b"".join(Path(f).read_bytes() for f in (__file__, scene_mod.__file__, cast_mod.__file__)))
+    look = {k: v for k, v in plan.items() if k not in ("scenes", "lines", "end", "total", "sprites")}
+    files = {n: {s: _stamp(f) if f else None for s, f in sorted(states.items())}
+             for n, states in sorted(plan["sprites"].items())}
+    keys = []
+    for sc in plan["scenes"]:
+        lines = [ln for ln in plan["lines"] if ln["t1"] >= sc["t0"] and ln["t0"] < sc["t1"]]
+        spec = [code.hexdigest(), look, venc, sc, lines, files, _stamp(sc["bg_path"]) if sc["bg_path"] else None]
+        keys.append(hashlib.sha1(json.dumps(spec, sort_keys=True, default=str).encode()).hexdigest()[:16])
+    return keys
+
+
+def encode(plan, workers, preset, crf, tmp, cache):
+    """Renders all frames into tmp/video.mp4 (H.264, no sound). Chunks never cross a scene and are kept in
+    `cache`, named by what they show: rendering again only draws the scenes that changed, and a render
+    that was cancelled or crashed continues with the chunks it had finished."""
     import multiprocessing as mp
 
     fps = plan["fps"]
     frames = int(math.ceil(plan["total"] * fps))
-    n = max(1, min(frames // (fps * 2), workers * 3))
-    bounds = [round(i * frames / n) for i in range(n + 1)]
+    per = max(fps * 2, frames // max(1, workers * 3))  # frames per chunk
     venc = ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
     tmp.mkdir(parents=True, exist_ok=True)
-    jobs = [(bounds[i], bounds[i + 1], tmp / f"chunk_{i:03d}.mp4", venc) for i in range(n)]
-    done = 0
-    if workers <= 1:
+    cache.mkdir(parents=True, exist_ok=True)
+    jobs = []
+    for i, (sc, key) in enumerate(zip(plan["scenes"], _scene_keys(plan, venc))):
+        a = min(frames, int(math.ceil(sc["t0"] * fps)))
+        b = frames if i == len(plan["scenes"]) - 1 else min(frames, int(math.ceil(sc["t1"] * fps)))
+        n = max(1, round((b - a) / per))
+        for k in range(n):
+            x, y = a + round(k * (b - a) / n), a + round((k + 1) * (b - a) / n)
+            if y > x:
+                jobs.append((x, y, cache / f"{key}_{x - a}_{y - a}.mp4", venc))
+    todo = [j for j in jobs if not j[2].exists()]
+    done = sum(j[1] - j[0] for j in jobs) - sum(j[1] - j[0] for j in todo)
+    if done:
+        print(f"[render ] {done}/{frames} frames reused from the last render ({len(jobs) - len(todo)} of {len(jobs)} parts)",
+              flush=True)
+    if todo and workers <= 1:
         _init(plan)
-        for j in jobs:
+        for j in todo:
             done += _chunk(j)
-            print(f"[render ] {done}/{frames} frames", flush=True)
-    else:
-        with mp.get_context("spawn").Pool(workers, initializer=_init, initargs=(plan,)) as pool:
-            for k in pool.imap(_chunk, jobs):
+            print(f"[render ] {done}/{frames} frames ({100 * done // frames}%)", flush=True)
+    elif todo:
+        with mp.get_context("spawn").Pool(min(workers, len(todo)), initializer=_init, initargs=(plan,)) as pool:
+            for k in pool.imap_unordered(_chunk, todo):
                 done += k
                 print(f"[render ] {done}/{frames} frames ({100 * done // frames}%)", flush=True)
     video = tmp / "video.mp4"
     top5.concat([j[2] for j in jobs], video)
-    for j in jobs:
-        j[2].unlink()
+    keep = {j[2] for j in jobs}
+    for f in cache.iterdir():  # parts of scenes that no longer exist, and leftovers of cancelled runs
+        if f not in keep:
+            f.unlink(missing_ok=True)
     return video
 
 

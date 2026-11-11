@@ -17,13 +17,15 @@ Usage (via 12-comedy.bat / 12-comedy-preview.bat, which use ComfyUI's embedded P
 Result: comedy/out/<title>/<title>.mp4 (+ _preview.mp4, _thumbnail.jpg, script.json, script.txt)
 
 Kept between sketches (comedy/library.py): saved characters look and sound the same in every sketch, a
-place's background is drawn once.
+place's background is drawn once. Rendering again after editing script.json only renders the scenes that
+changed, and a cancelled render continues where it stopped.
 """
 import argparse
 import datetime as dt
 import json
 import os
 import random
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -255,20 +257,19 @@ def main():
     print(f"[plan   ] {plan['total']:.1f} s, {len(plan['scenes'])} scenes, {W}x{H} @ {fps} fps")
 
     # ---- 5. sound
-    tmp = folder / ("_tmp_preview" if args.preview else "_tmp")
+    quality = "preview" if args.preview else "final"
+    tmp = folder / f"_tmp_{quality}"
     tmp.mkdir(parents=True, exist_ok=True)
     wav = sound.mix(tmp / "audio.wav", plan["total"], dialogue, effects, args.music, script["seed"], plan["scenes"])
 
     # ---- 6. render
     name = cast_mod.mc.slug(script["title"])[:60] + ("_preview" if args.preview else "")
     print(f"[render ] {args.workers} workers ...")
-    video = render.encode(plan, wav, folder / f"{name}.mp4", args.workers, preset, crf, tmp)
+    video = render.encode(plan, args.workers, preset, crf, tmp, folder / "_render" / quality)
     thumb = render.thumbnail(plan, folder / f"{name}_thumbnail.jpg")
     out = folder / f"{name}.mp4"
     render.top5.mux(video, out, cover=thumb, audio=wav)
-    for p in tmp.iterdir():
-        p.unlink()
-    tmp.rmdir()
+    shutil.rmtree(tmp, ignore_errors=True)
     print(f"[done   ] {out}  ({plan['total']:.0f} s video in {(time.time() - started) / 60:.1f} min)")
     if args.preview:
         print(f"[done   ] happy with it? Edit {folder / 'script.json'} if needed, then render it in 1080p 60 fps:\n"
