@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+The same rules, spelled out for every agent, live in `AGENTS.md` - keep both in sync.
+
 ## Models for agents
 
 - **Orchestrator: Opus 5.5** (`claude-opus-5-5`). The main session plans, splits the work, makes the design
