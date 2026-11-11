@@ -196,6 +196,9 @@ crawls.
 
 ### Image-to-video options (`10-image-to-video.bat photo.jpg [options]`)
 - `--prompt "the dog wags its tail, slow zoom in"` what should move and how the camera moves (English works best, repeatable, one per clip); without it `qwen3-vl:4b` looks at the image and writes one
+- `--text "a red fox runs through deep snow at sunrise"` instead of an image: **text-to-video** with the same model
+  (no extra download). The LLM turns the idea into detailed prompts, which Wan follows much better (`--exact` uses
+  the text as it is); `--aspect 16:9|9:16|1:1|4:3|3:4` is the clip's shape. In the GUI: "Start from: a description"
 - `--count 3` number of clips, each with its own prompt and seed
 - `--seconds 3` clip length at 24 fps (default 3; ~5 s is the practical limit on 6 GB VRAM)
 - `--size 832` long side in pixels, the aspect ratio follows the image (default 832 -> 832x480 for 16:9; `640` is faster)

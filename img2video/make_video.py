@@ -1,19 +1,23 @@
-"""Animate a still image into a short MP4 clip (image-to-video) with Wan 2.2 TI2V 5B in ComfyUI.
+"""Animate a still image into a short MP4 clip (image-to-video), or make a clip from a description alone
+(text-to-video), with Wan 2.2 TI2V 5B in ComfyUI - the same model does both.
 
 Pipeline per clip:
   1. Motion  - what should happen: --prompt, or Ollama's vision model looks at the image and
                writes a short motion/camera prompt (falls back to a generic one without Ollama)
   2. Animate - ComfyUI Wan 2.2 5B: the image is the first frame, the model generates the rest
   3. Save    - H.264 MP4 at 24 fps
+Text-to-video (--text, no image): the LLM turns the idea into detailed video prompts (--exact: use the text
+as it is), the clip gets the --aspect ratio.
 
 Usage (via 10-image-to-video.bat, which uses ComfyUI's embedded Python):
   10-image-to-video.bat photo.jpg [--prompt "the dog wags its tail, camera slowly zooms in"]
                                   [--seconds 3] [--res 720p] [--steps 20] [--count 2] [--seed 42]
+  10-image-to-video.bat --text "a red fox runs through deep snow at sunrise" [--aspect 9:16] [--count 2]
   --res 480p/720p is generated natively; 1080p/1440p/4k is generated at 720p (Wan 2.2 5B's maximum,
   anything bigger does not fit into VRAM) and then upscaled with ffmpeg (lanczos).
 Needs models/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors, models/vae/wan2.2_vae.safetensors
 and models/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors (0-download-all.bat).
-Result: img2video/out/<image>_<seed>.mp4
+Result: img2video/out/<image or text>_<seed>.mp4
 """
 import argparse
 import io
@@ -100,20 +104,46 @@ def describe_motion(img, count):
     return [str(p).strip() for p in prompts if str(p).strip()]
 
 
+ASPECTS = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1), "4:3": (4, 3), "3:4": (3, 4)}
+
+
+def describe_scene(text, count):
+    """Text-to-video: the idea as detailed prompts, the way Wan was trained (subject, action, place, light, camera)."""
+    prompt = (f"Turn this idea into {count} different English prompts for a text-to-video model that makes one "
+              f"continuous shot of a few seconds: {text!r}. Each prompt 40-70 words in one paragraph: the subject and "
+              "what it looks like, what it does (one clear motion), the place, the light and mood, the visual "
+              "style, and one simple camera move (static, slow push-in, pan, tracking shot ...). No scene cuts, "
+              "no on-screen text. Reply with JSON only: {\"prompts\": [\"...\"]}")
+    prompts = llm.text_json(prompt, temperature=0.8).get("prompts", [])
+    return [str(p).strip() for p in prompts if str(p).strip()]
+
+
 # ---------------------------------------------------------------- 2. animate
 def animate(img, prompt, seed, size, frames, steps, cfg):
+    """img: the first frame, or None for text-to-video."""
     wf = json.loads((HERE / "img2video_workflow_api.json").read_text())
     w, h = size
-    img.convert("RGB").resize((w, h), Image.LANCZOS).save(COMFY_DIR / "input" / "img2video_input.png")
+    if img is None:  # the latent node starts from noise without a start image
+        del wf["5"], wf["8"]["inputs"]["start_image"]
+    else:
+        img.convert("RGB").resize((w, h), Image.LANCZOS).save(COMFY_DIR / "input" / "img2video_input.png")
     wf["6"]["inputs"]["text"] = f"{prompt}, {QUALITY}"
     wf["8"]["inputs"].update(width=w, height=h, length=frames)
     wf["9"]["inputs"].update(seed=seed, steps=steps, cfg=cfg)
     wf["11"]["inputs"]["fps"] = float(FPS)
 
     pid = http_json(f"{COMFY_URL}/prompt", {"prompt": wf})["prompt_id"]
-    start = time.time()
+    start, down = time.time(), 0
     while True:
-        hist = http_json(f"{COMFY_URL}/history/{pid}")
+        try:
+            hist = http_json(f"{COMFY_URL}/history/{pid}", timeout=30)
+            down = 0
+        except OSError as e:  # busy loading a model is fine, gone for a minute is not
+            down += 1
+            if down >= 12:
+                raise RuntimeError(f"ComfyUI stopped answering ({e}) - it may have run out of memory, see its window")
+            time.sleep(5)
+            continue
         if pid in hist:
             entry = hist[pid]
             if entry.get("status", {}).get("status_str") == "error":
@@ -131,7 +161,11 @@ def animate(img, prompt, seed, size, frames, steps, cfg):
 # ---------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("image", type=Path, help="start image (jpg/png/webp)")
+    ap.add_argument("image", type=Path, nargs="?", help="start image (jpg/png/webp); leave out with --text")
+    ap.add_argument("--text", help="text-to-video: what the clip shows, no start image")
+    ap.add_argument("--exact", action="store_true", help="with --text: use the text as the prompt as it is "
+                    "(default: the LLM writes detailed prompts from it, which Wan follows much better)")
+    ap.add_argument("--aspect", choices=list(ASPECTS), default="16:9", help="with --text: shape of the clip (default 16:9)")
     ap.add_argument("--prompt", action="append", default=[],
                     help="what should move/happen, English works best (repeatable, one per clip); default: ask the vision model")
     ap.add_argument("--count", type=int, default=1, help="number of clips, each with its own prompt and seed (default 1)")
@@ -145,15 +179,30 @@ def main():
     ap.add_argument("--out", type=Path, default=HERE / "out")
     args = ap.parse_args()
 
-    if not args.image.is_file():
+    if bool(args.image) == bool(args.text):
+        ap.error("give a start image or --text \"...\" (one of them)")
+    if args.image and not args.image.is_file():
         ap.error(f"image not found: {args.image}")
     if not reachable(COMFY_URL):
         sys.exit("ComfyUI is not running (start-comfyui.bat)")
 
-    img = ImageOps.exif_transpose(Image.open(args.image)).convert("RGB")
     count = max(args.count, len(args.prompt))
     prompts = list(args.prompt)
-    if len(prompts) < count and llm.available():
+    if args.text:
+        aw, ah = ASPECTS[args.aspect]
+        img, shape, name = None, Image.new("RGB", (aw * 64, ah * 64)), slug(args.text)[:50]
+        if len(prompts) < count and not args.exact and llm.available():
+            print(f"[prompt ] {llm.text_label()} writes the video prompt ...")
+            try:
+                prompts += describe_scene(args.text, count - len(prompts))
+                llm.unload()
+            except Exception as e:
+                print(f"[prompt ] LLM failed ({str(e)[:150]}), using the text as it is")
+        prompts = (prompts or [args.text])
+    else:
+        img = shape = ImageOps.exif_transpose(Image.open(args.image)).convert("RGB")
+        name = slug(args.image.stem)
+    if img is not None and len(prompts) < count and llm.available():
         print(f"[motion ] asking {llm.label()} ...")
         try:
             prompts += describe_motion(img, count - len(prompts))
@@ -163,7 +212,7 @@ def main():
     prompts = (prompts * count)[:count]
 
     target = RESOLUTIONS.get(args.res)
-    size = short_side_size(img, min(target, NATIVE_MAX)) if target else video_size(img, args.size)
+    size = short_side_size(shape, min(target, NATIVE_MAX)) if target else video_size(shape, args.size)
     factor = target / NATIVE_MAX if target and target > NATIVE_MAX else None
     frames = max(1, round(args.seconds * FPS / 4)) * 4 + 1  # Wan needs 4n+1 frames
     seed = args.seed if args.seed is not None else random.randint(0, 2**31)
@@ -172,7 +221,7 @@ def main():
         s = seed + i
         print(f"[animate] clip {i + 1}/{count}: {size[0]}x{size[1]}, {frames} frames, seed {s}")
         print(f"[prompt ] {prompt}")
-        mp4 = args.out / f"{slug(args.image.stem)}_{s}.mp4"
+        mp4 = args.out / f"{name}_{s}.mp4"
         clip = animate(img, prompt, s, size, frames, args.steps, args.cfg)
         if factor:
             raw = mp4.with_name(mp4.stem + "_720p.mp4")

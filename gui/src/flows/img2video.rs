@@ -4,11 +4,17 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use super::widgets as w;
-use super::{Flow, IMAGES, Llm, Needs, WAN5B, each, filled, num, opt, out_or, required_file};
+use super::{Flow, IMAGES, Llm, Needs, WAN5B, each, filled, flag, num, opt, out_or, required_file};
 
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct Img2Video {
+    /// Text-to-video: no start image, the clip is made from `text` alone.
+    from_text: bool,
+    text: String,
+    /// Use the text as the prompt as it is instead of letting the LLM write detailed prompts.
+    exact: bool,
+    aspect: String,
     image: String,
     prompts: Vec<String>,
     count: u32,
@@ -24,6 +30,10 @@ pub struct Img2Video {
 impl Default for Img2Video {
     fn default() -> Self {
         Self {
+            from_text: false,
+            text: String::new(),
+            exact: false,
+            aspect: "16:9".into(),
             image: String::new(),
             prompts: Vec::new(),
             count: 1,
@@ -40,10 +50,10 @@ impl Default for Img2Video {
 
 impl Flow for Img2Video {
     fn title(&self) -> &'static str {
-        "Image to video"
+        "Image / text to video"
     }
     fn blurb(&self) -> &'static str {
-        "Still image -> short MP4 clip with Wan 2.2 5B; the vision LLM writes the motion prompt if you don't."
+        "Still image or a description -> short MP4 clip with Wan 2.2 5B; the LLM writes the detailed prompt if you don't."
     }
     fn script(&self) -> &'static str {
         "img2video/make_video.py"
@@ -51,12 +61,35 @@ impl Flow for Img2Video {
 
     fn ui(&mut self, ui: &mut egui::Ui, _root: &Path) {
         w::form(ui, "img2video", |ui| {
-            w::label(ui, "Start image", "");
-            w::file(ui, &mut self.image, IMAGES, "jpg/png/webp");
+            w::label(ui, "Start from", "the same model animates a picture or makes a clip from a description alone");
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.from_text, false, "an image");
+                ui.radio_value(&mut self.from_text, true, "a description (text to video)");
+            });
             ui.end_row();
-            w::label(ui, "Motion prompts", "empty = the vision LLM writes them");
-            w::list(ui, "prompts", &mut self.prompts, "what moves + one camera move", None, false);
-            ui.end_row();
+            if self.from_text {
+                w::label(ui, "Description", "what the clip shows: subject, what it does, where");
+                ui.add(egui::TextEdit::multiline(&mut self.text).desired_rows(2).hint_text("e.g. a red fox runs through deep snow at sunrise"));
+                ui.end_row();
+                w::label(ui, "Prompt", "Wan follows long, detailed prompts much better than a short idea");
+                ui.checkbox(&mut self.exact, "use my text as it is (default: the LLM writes detailed prompts from it)");
+                ui.end_row();
+                w::label(ui, "Shape", "");
+                w::choice(
+                    ui,
+                    "aspect",
+                    &mut self.aspect,
+                    &[("16:9", "16:9 landscape"), ("9:16", "9:16 vertical (Shorts/Reels)"), ("1:1", "1:1 square"), ("4:3", "4:3"), ("3:4", "3:4")],
+                );
+                ui.end_row();
+            } else {
+                w::label(ui, "Start image", "");
+                w::file(ui, &mut self.image, IMAGES, "jpg/png/webp");
+                ui.end_row();
+                w::label(ui, "Motion prompts", "empty = the vision LLM writes them");
+                w::list(ui, "prompts", &mut self.prompts, "what moves + one camera move", None, false);
+                ui.end_row();
+            }
             w::label(ui, "Clips", "each with its own prompt and seed");
             ui.add(egui::DragValue::new(&mut self.count).range(1..=10));
             ui.end_row();
@@ -99,10 +132,22 @@ impl Flow for Img2Video {
     }
 
     fn args(&self) -> Result<Vec<String>, String> {
-        required_file(&self.image, "a start image")?;
         let d = Img2Video::default();
-        let mut a = vec![self.image.trim().to_owned()];
-        each(&mut a, "--prompt", &self.prompts);
+        let mut a = Vec::new();
+        if self.from_text {
+            if self.text.trim().is_empty() {
+                return Err("describe the clip".into());
+            }
+            opt(&mut a, "--text", &self.text.replace(['\r', '\n'], " "));
+            flag(&mut a, "--exact", self.exact);
+            if self.aspect != d.aspect {
+                opt(&mut a, "--aspect", &self.aspect);
+            }
+        } else {
+            required_file(&self.image, "a start image")?;
+            a.push(self.image.trim().to_owned());
+            each(&mut a, "--prompt", &self.prompts);
+        }
         num(&mut a, "--count", self.count, d.count);
         num(&mut a, "--seconds", self.seconds, d.seconds);
         if self.res == "custom" {
@@ -121,7 +166,8 @@ impl Flow for Img2Video {
 
     fn needs(&self, llm: &Llm) -> Needs {
         let mut n = Needs::default();
-        if (filled(&self.prompts).len() as u32) < self.count {
+        let written = if self.from_text { u32::from(self.exact) * self.count } else { filled(&self.prompts).len() as u32 };
+        if written < self.count {
             n.llm(llm);
         }
         n.comfy(WAN5B);
@@ -134,6 +180,7 @@ impl Flow for Img2Video {
 
     fn drop_files(&mut self, files: Vec<PathBuf>) {
         if let Some(f) = files.into_iter().next() {
+            self.from_text = false;
             self.image = f.display().to_string();
         }
     }
