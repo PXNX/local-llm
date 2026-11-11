@@ -211,7 +211,14 @@ dragged into ComfyUI); the 5B fp16 model is bigger than the 6 GB VRAM and gets o
 - `--topic "Putin explains the refinery fires"` what the sketch is about, `--cast Trump --cast Zelensky` who is in it
   (default: the LLM picks 2-3 fitting leaders), `--seconds 60` rough length, `--lang English` dialogue language
 - `--script comedy\out\<title>\script.json` render an earlier (edited) script instead of writing a new one;
-  `--write-only` only writes `script.json` + a readable `script.txt`. `comedy\example_script.json` is a ready example
+  `--write-only` only writes `script.json` + a readable `script.txt`. `comedy\example_script.json` is a ready example.
+  Rendering a script again only renders the scenes that changed (the parts are kept in `<title>\_render\`), and a
+  cancelled render continues where it stopped
+- `--save-cast` keeps the sketch's characters (picture, personality, look, voice) in `comedy\library\characters.json`;
+  later sketches reuse them by name, so a character looks and sounds the same in every video (GUI: "Add a saved
+  character", the save icon on a character row). A place's background is drawn once and kept in
+  `comedy\library\scenes\<place>.png` - put your own picture there to use it instead; `--new-backgrounds` redraws
+  them, `--no-library` ignores the saved characters and backgrounds
 - `--preview` 480p 30 fps (what `12-comedy-preview.bat` passes), default 1080p 60 fps; `--format vertical` 1080x1920 for Shorts
 - `--no-generate` never draw in ComfyUI (placeholders for missing drawings), `--use-screenshots` fall back to the flow-6
   screenshots of the channel - those are freeonis' own character designs, fine for testing, not for publishing

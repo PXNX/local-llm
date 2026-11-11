@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::widgets as w;
 use super::{FLUX1, Flow, Llm, Needs, flag, num, opt, out_or, required_file};
 use crate::icons;
+use crate::jobs;
 use crate::ui;
 
 const SCRIPTS: (&str, &[&str]) = ("Sketch script", &["json"]);
@@ -23,6 +24,12 @@ pub struct Comedy {
     cast_images: Vec<String>,
     /// Optional personality per character, aligned with `cast` (e.g. "boastful, repeats himself").
     cast_personality: Vec<String>,
+    /// --save-cast: keep the sketch's characters (with their voices) in the library.
+    save_cast: bool,
+    new_backgrounds: bool,
+    /// comedy/library/characters.json, re-read when the file changes.
+    #[serde(skip)]
+    library: Library,
     lang: String,
     seconds: u32,
     write_only: bool,
@@ -51,6 +58,9 @@ impl Default for Comedy {
             cast: Vec::new(),
             cast_images: Vec::new(),
             cast_personality: Vec::new(),
+            save_cast: false,
+            new_backgrounds: false,
+            library: Library::default(),
             lang: "English".into(),
             seconds: 60,
             write_only: false,
@@ -134,6 +144,18 @@ impl Flow for Comedy {
             w::label(ui, "Drawings", "missing caricatures/objects/backgrounds are drawn with FLUX.1 (about 1 min each), else placeholders");
             ui.vertical(|ui| {
                 ui.checkbox(&mut self.draw_missing, "draw missing ones in ComfyUI");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.new_backgrounds, "draw the backgrounds again")
+                        .on_hover_text("a place's background is drawn once and reused by every sketch; this replaces the saved ones");
+                    let scenes = root.join("comedy").join("library").join("scenes");
+                    if scenes.is_dir()
+                        && ui::button(ui, icons::FOLDER_OPEN, "saved backgrounds")
+                            .on_hover_text("one picture per place - put your own picture there to use it instead")
+                            .clicked()
+                    {
+                        jobs::open_dir(&scenes);
+                    }
+                });
                 ui.checkbox(&mut self.use_screenshots, "use flow 6 screenshots (the channel's own designs - not for publishing)");
             });
             ui.end_row();
@@ -222,6 +244,8 @@ impl Flow for Comedy {
             num(&mut a, "--seconds", self.seconds, d.seconds);
             flag(&mut a, "--write-only", self.write_only);
         }
+        flag(&mut a, "--save-cast", self.save_cast);
+        flag(&mut a, "--new-backgrounds", self.new_backgrounds && self.draw_missing);
         flag(&mut a, "--preview", self.preview);
         if self.format != d.format {
             opt(&mut a, "--format", &self.format);
@@ -288,8 +312,33 @@ impl Comedy {
         self.cast_images.resize(self.cast.len(), String::new());
         self.cast_personality.resize(self.cast.len(), String::new());
         let start = root.join("characters").join("out");
+        self.library.refresh(root);
         let mut remove = None;
+        let (mut add, mut forget, mut keep) = (None, None, None);
         ui.vertical(|ui| {
+            let saved = self.library.names();
+            ui.horizontal(|ui| {
+                let shown =
+                    if saved.is_empty() { "no saved characters yet".to_owned() } else { format!("Add a saved character ({})", saved.len()) };
+                ui.add_enabled_ui(!saved.is_empty(), |ui| {
+                    egui::ComboBox::from_id_salt("comedy-library").selected_text(shown).width(230.0).show_ui(ui, |ui| {
+                        for n in &saved {
+                            ui.horizontal(|ui| {
+                                if ui::tool(ui, icons::DELETE_OUTLINE, "delete this saved character").clicked() {
+                                    forget = Some(n.clone());
+                                }
+                                let tip = "add to this sketch, with its picture and personality";
+                                if ui.selectable_label(false, n).on_hover_text(tip).clicked() {
+                                    add = Some(n.clone());
+                                }
+                            });
+                        }
+                    });
+                });
+                ui.checkbox(&mut self.save_cast, "save this sketch's characters").on_hover_text(
+                    "after writing, keeps every character of the sketch with its picture, personality and voice -                      later sketches reuse them by name, so they look and sound the same",
+                );
+            });
             let rows = self.cast.iter_mut().zip(self.cast_images.iter_mut()).zip(self.cast_personality.iter_mut());
             for (i, ((name, image), personality)) in rows.enumerate() {
                 ui.horizontal(|ui| {
@@ -318,6 +367,10 @@ impl Comedy {
                                 image.clear();
                             }
                         }
+                        let tip = "save this character (picture, personality) for later sketches";
+                        if !name.trim().is_empty() && ui::tool(ui, icons::CONTENT_SAVE_OUTLINE, tip).clicked() {
+                            keep = Some(i);
+                        }
                         if ui::tool(ui, icons::DELETE_OUTLINE, "remove character").clicked() {
                             remove = Some(i);
                         }
@@ -340,11 +393,156 @@ impl Comedy {
                 self.cast_personality.push(String::new());
             }
         });
+        if let Some(i) = keep {
+            self.library.keep(self.cast[i].trim(), self.cast_images[i].trim(), self.cast_personality[i].trim());
+        }
         if let Some(i) = remove {
             self.cast.remove(i);
             self.cast_images.remove(i);
             self.cast_personality.remove(i);
         }
+        if let Some(n) = forget {
+            self.library.forget(&n);
+        }
+        if let Some(n) = add
+            && let Some((image, personality)) = self.library.get(&n)
+        {
+            // an empty row or the same name is filled in, else a new row
+            let i = self.cast.iter().position(|c| c.trim().is_empty() || same(c, &n)).unwrap_or_else(|| {
+                self.cast.push(String::new());
+                self.cast_images.push(String::new());
+                self.cast_personality.push(String::new());
+                self.cast.len() - 1
+            });
+            self.cast[i] = n;
+            self.cast_images[i] = image;
+            self.cast_personality[i] = personality;
+        }
+    }
+}
+
+fn same(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+type Entry = serde_json::Map<String, serde_json::Value>;
+
+/// The saved characters of comedy/library.py (`{"characters": [{"name", "image", "personality", "voice", ...}]}`).
+/// Only name, picture and personality are edited here; the other fields (voices) are kept as they are.
+#[derive(Default)]
+struct Library {
+    file: PathBuf,
+    modified: Option<std::time::SystemTime>,
+    entries: Vec<Entry>,
+}
+
+impl Library {
+    /// Reads the file again when it changed (a run with --save-cast writes it).
+    fn refresh(&mut self, root: &Path) {
+        let file = root.join("comedy").join("library").join("characters.json");
+        let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+        if file == self.file && modified == self.modified {
+            return;
+        }
+        self.entries = std::fs::read_to_string(&file).ok().map(|t| parse(&t)).unwrap_or_default();
+        self.file = file;
+        self.modified = modified;
+    }
+
+    fn names(&self) -> Vec<String> {
+        self.entries.iter().filter_map(|e| e.get("name")?.as_str().map(str::to_owned)).collect()
+    }
+
+    fn position(&self, name: &str) -> Option<usize> {
+        self.entries.iter().position(|e| e.get("name").and_then(|n| n.as_str()).is_some_and(|n| same(n, name)))
+    }
+
+    /// (picture, personality) of a saved character.
+    fn get(&self, name: &str) -> Option<(String, String)> {
+        let e = &self.entries[self.position(name)?];
+        let text = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+        Some((text("image"), text("personality")))
+    }
+
+    fn keep(&mut self, name: &str, image: &str, personality: &str) {
+        let i = self.position(name).unwrap_or_else(|| {
+            self.entries.push(Entry::new());
+            self.entries.len() - 1
+        });
+        let e = &mut self.entries[i];
+        e.insert("name".into(), name.into());
+        for (k, v) in [("image", image), ("personality", personality)] {
+            if v.is_empty() {
+                e.remove(k);
+            } else {
+                e.insert(k.into(), v.into());
+            }
+        }
+        self.write();
+    }
+
+    fn forget(&mut self, name: &str) {
+        if let Some(i) = self.position(name) {
+            self.entries.remove(i);
+            self.write();
+        }
+    }
+
+    /// Atomic (temp file + rename): a crash never leaves half a library.
+    fn write(&mut self) {
+        let json = serde_json::json!({ "characters": self.entries });
+        if let Some(dir) = self.file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let tmp = self.file.with_extension("json.tmp");
+        if std::fs::write(&tmp, serde_json::to_string_pretty(&json).unwrap_or_default()).is_ok() {
+            let _ = std::fs::rename(tmp, &self.file);
+        }
+        self.modified = std::fs::metadata(&self.file).and_then(|m| m.modified()).ok();
+    }
+}
+
+fn parse(text: &str) -> Vec<Entry> {
+    let Ok(serde_json::Value::Object(mut root)) = serde_json::from_str(text) else { return Vec::new() };
+    let Some(serde_json::Value::Array(list)) = root.remove("characters") else { return Vec::new() };
+    list.into_iter()
+        .filter_map(|v| match v {
+            serde_json::Value::Object(e) if e.get("name").is_some_and(|n| n.is_string()) => Some(e),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_keeps_voices_when_a_character_is_saved_again() {
+        let dir = std::env::temp_dir().join(format!("local-llm-library-{}", std::process::id()));
+        let file = dir.join("comedy").join("library").join("characters.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, r#"{"characters": [{"name": "Trump", "voice": "am_onyx", "pitch": -1}, "junk"]}"#).unwrap();
+        let mut lib = Library::default();
+        lib.refresh(&dir);
+        assert_eq!(lib.names(), ["Trump"]);
+        lib.keep("trump", "t.png", "boastful");
+        lib.keep("Putin", "", "");
+        let mut again = Library::default();
+        again.refresh(&dir);
+        assert_eq!(again.names(), ["trump", "Putin"]);
+        assert_eq!(again.get("TRUMP"), Some(("t.png".into(), "boastful".into())));
+        assert_eq!(again.entries[0]["voice"], "am_onyx");
+        again.forget("putin");
+        assert_eq!(again.names(), ["trump"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn library_options_reach_the_command_line() {
+        let c = Comedy { topic: "x".into(), save_cast: true, new_backgrounds: true, ..Default::default() };
+        let a = c.args().unwrap();
+        assert!(a.contains(&"--save-cast".to_string()) && a.contains(&"--new-backgrounds".to_string()));
     }
 }
 
