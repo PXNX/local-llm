@@ -13,7 +13,11 @@ Usage (via 12-comedy.bat / 12-comedy-preview.bat, which use ComfyUI's embedded P
   12-comedy-preview.bat --topic "..."           480p 30 fps, quick check of the timing
   12-comedy.bat --script comedy\\out\\<name>\\script.json   render an (edited) script in 1080p 60 fps
   12-comedy.bat ... --art svg                    vector drawings (traced once, sharp close-ups)
+  12-comedy.bat --topic "..." --cast Trump --save-cast   keep the characters (picture, personality, voice)
 Result: comedy/out/<title>/<title>.mp4 (+ _preview.mp4, _thumbnail.jpg, script.json, script.txt)
+
+Kept between sketches (comedy/library.py): saved characters look and sound the same in every sketch, a
+place's background is drawn once.
 """
 import argparse
 import datetime as dt
@@ -31,6 +35,7 @@ sys.path.insert(0, str(REPO))
 from common import llm  # noqa: E402
 
 import cast as cast_mod  # noqa: E402
+import library  # noqa: E402
 import render  # noqa: E402
 import scene as scene_mod  # noqa: E402
 import sound  # noqa: E402
@@ -108,6 +113,11 @@ def main():
                     "with ComfyUI, use placeholders (default: draw them when ComfyUI runs)")
     ap.add_argument("--use-screenshots", action="store_true", help="use flow 6 screenshots (characters/out) for "
                     "characters without caricatures - those are the channel's own designs, not for publishing")
+    ap.add_argument("--save-cast", action="store_true", help="save this sketch's characters (picture, personality, "
+                    "look, voice) in comedy/library/characters.json; later sketches reuse them by name")
+    ap.add_argument("--no-library", action="store_true", help="ignore the saved characters and backgrounds")
+    ap.add_argument("--new-backgrounds", action="store_true", help="draw the backgrounds again instead of "
+                    "reusing the saved ones of comedy/library/scenes (the new ones replace them)")
     ap.add_argument("--voice-engine", choices=["auto", "kokoro", "sapi"], default="auto")
     ap.add_argument("--music", choices=["auto", "calm", "funny", "none"], default="auto",
                     help="quiet music bed: auto = fits each scene (the script's per-scene mood: deadpan, bouncy, "
@@ -134,6 +144,8 @@ def main():
     cast_names, cast_images = parse_cast(args.cast)
     personalities = {n.strip(): t.strip() for n, _, t in (p.partition("=") for p in args.personality)
                      if n.strip() and t.strip()}
+    landscape = args.format == "landscape"
+    use_library = not args.no_library
 
     # ---- 1. write
     if args.script:
@@ -146,8 +158,9 @@ def main():
             sys.exit("No LLM available: set OPENROUTER_API_KEY in .env or start Ollama.")
         for attempt in range(3):
             try:
+                hints = {**(library.personalities(cast_names) if use_library else {}), **personalities}
                 script = writer.normalize(writer.write(args.topic, args.lang, args.seconds, cast_names, known_names(), llm,
-                                                              personalities))
+                                                              hints, library.places(landscape) if use_library else ()))
                 break
             except (ValueError, RuntimeError, KeyError, TypeError) as e:
                 print(f"[write  ] unusable script ({str(e)[:150]}), trying again ...")
@@ -159,15 +172,21 @@ def main():
     bind(script, personalities, "personality")
     script.setdefault("seed", args.seed if args.seed is not None else random.randint(0, 2**31))
     script["lang"] = args.lang if not args.script else raw.get("lang", args.lang)
+    if use_library:
+        library.fill(script["cast"], script["lang"])
     folder.mkdir(parents=True, exist_ok=True)
     print(writer.as_text(script))
 
     # ---- 3a. voices first: they don't need the GPU and fix the cast's voices in script.json
     voices = voice.Voices(script["lang"], args.voice_engine)
     voices.assign(script["cast"], llm)
-    (folder / "script.json").write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp_script = folder / "script.json.tmp"  # never a half-written script.json, also when cancelled right now
+    tmp_script.write_text(json.dumps(script, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp_script, folder / "script.json")
     (folder / "script.txt").write_text(writer.as_text(script), encoding="utf-8")
     print(f"[write  ] {folder / 'script.json'}")
+    if args.save_cast:
+        library.remember(script["cast"], script["lang"])
     if args.write_only:
         return 0
 
@@ -195,13 +214,27 @@ def main():
              {b.get("thing") for sc in script["scenes"] for b in sc["beats"] if b.get("event") == "explode"}
     for thing in writer.things(script):
         sprites[thing] = cs.thing(thing, ["normal", "fire"] if thing in burned else ["normal"])
-    W_, H_ = (16, 9) if args.format == "landscape" else (9, 16)
-    bg_paths = {}
+    W_, H_ = (16, 9) if landscape else (9, 16)
+    bg_paths, reused = {}, set()
     for si, sc in enumerate(script["scenes"]):
-        path = scene_mod.ai_path(sc["background"], W_, H_, script["seed"] + si)
-        if path is not None and not path.exists() and generate:
-            scene_mod.generate(sc["background"], W_, H_, script["seed"] + si, cast_mod.mc)
+        kind = sc["background"]
+        saved = library.scene(kind, landscape) if use_library and not args.new_backgrounds else None
+        if saved is not None:
+            bg_paths[si] = saved
+            reused.add(kind)
+            continue
+        path = scene_mod.ai_path(kind, W_, H_, script["seed"] + si)
+        if path is not None and generate and (not path.exists() or args.new_backgrounds):
+            path.unlink(missing_ok=True)
+            try:
+                scene_mod.generate(kind, W_, H_, script["seed"] + si, cast_mod.mc)
+            except Exception as e:  # one failed drawing must not cost the whole sketch
+                print(f"[scene  ] drawing {kind} failed ({str(e)[:150]}), using the plain set")
         bg_paths[si] = path if path is not None and path.exists() else None
+        if bg_paths[si] is not None and use_library:
+            bg_paths[si] = library.keep_scene(kind, landscape, bg_paths[si])
+    if reused:
+        print(f"[scene  ] saved background reused: {', '.join(sorted(reused))}")
     if args.art == "svg":
         sprites = {k: {s: cast_mod.vector(p) if p else None for s, p in v.items()} for k, v in sprites.items()}
         bg_paths = {k: cast_mod.vector(p, "photo") if p else None for k, p in bg_paths.items()}

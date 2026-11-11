@@ -62,6 +62,7 @@ Dialogue language: {lang}
 Length: about {seconds} seconds, roughly {words} spoken words in total, 1-3 scenes, {beats} beats.
 {cast_hint}
 Drawings that already exist (prefer these names): {known}
+Places that already have a background (use one as "background" when it fits): {places}
 
 Reply with JSON only, in this structure (a template - replace every <...> with your own sketch about
 the topic, use as many scenes and beats as the sketch needs):
@@ -96,8 +97,9 @@ Rules:
 """
 
 
-def write(topic, lang, seconds, cast, known, llm, personalities=None):
-    """personalities: {name: how they talk and behave} from --personality, written into the prompt."""
+def write(topic, lang, seconds, cast, known, llm, personalities=None, places=()):
+    """personalities: {name: how they talk and behave} from --personality, written into the prompt.
+    places: backgrounds the library already has a drawing of."""
     words = int(seconds * 2.3)
     beats = f"{max(6, seconds // 6)}-{max(10, seconds // 3)}"
     cast_hint = f"Use these characters, with exactly these names: {', '.join(cast)}." if cast else \
@@ -106,7 +108,8 @@ def write(topic, lang, seconds, cast, known, llm, personalities=None):
         cast_hint += "\nPersonalities - let every line and action show them:\n" + \
             "\n".join(f"- {n}: {p}" for n, p in personalities.items())
     prompt = PROMPT.format(topic=topic, lang=lang, seconds=seconds, words=words, beats=beats, cast_hint=cast_hint,
-                           known=", ".join(known) or "none", example=EXAMPLE, backgrounds=", ".join(BACKGROUNDS),
+                           known=", ".join(known) or "none", places=", ".join(places) or "none",
+                           example=EXAMPLE, backgrounds=", ".join(BACKGROUNDS),
                            faces=", ".join(FACES), actions=", ".join(ACTIONS), sfx=", ".join(SFX),
                            moods=", ".join(MOODS))
     return llm.text_json(prompt, temperature=0.9, ollama_options={"num_predict": 3000, "num_ctx": 8192})
@@ -157,7 +160,8 @@ def normalize(script):
             return None
         for m in cast:  # "Donald Trump", "Trump" and "Tru,mp" are the same person
             keys = (_key(m["name"]), _key(m["who"]))
-            if k in keys or k.replace(" ", "") in (x.replace(" ", "") for x in keys)                     or k.split()[-1] == keys[0].split()[-1]:
+            if k in keys or k.replace(" ", "") in (x.replace(" ", "") for x in keys) \
+                    or k.split()[-1] == keys[0].split()[-1]:
                 by_key[k] = m
                 return m
         m = {"name": name, "who": str(who or name).strip(), "gender": "female" if str(gender).lower().startswith("f") else "male"}

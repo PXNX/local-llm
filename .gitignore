@@ -52,6 +52,7 @@ ComfyUI_windows_portable/ComfyUI/extra_model_paths.yaml
 
 # Comedy sketches (12-comedy.bat): output, voice/background cache, Kokoro TTS model
 comedy/out/
+comedy/library/
 comedy/cache/
 comedy/models/
 
