@@ -133,6 +133,27 @@
             "context": 32768,
             "output": 8192
           }
+        },
+        "unsloth/Qwen3.5-4B-GGUF:Q4_K_M": {
+          "name": "Unsloth Qwen3.5 4B (fits in VRAM, vision, quick)",
+          "limit": {
+            "context": 65536,
+            "output": 8192
+          }
+        },
+        "unsloth/Qwen3.6-35B-A3B-GGUF:Q3_K_XL": {
+          "name": "Unsloth Qwen3.6-35B-A3B UD-Q3_K_XL (MoE, 64k, vision)",
+          "limit": {
+            "context": 65536,
+            "output": 16384
+          }
+        },
+        "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q3_K_XL": {
+          "name": "Unsloth Qwen3-Coder 30B-A3B UD-Q3_K_XL (coder MoE, 64k)",
+          "limit": {
+            "context": 65536,
+            "output": 16384
+          }
         }
       }
     }

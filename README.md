@@ -421,6 +421,18 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   them measured 3.6 tokens/s, because attention then reads the KV cache over PCIe. A `q8_0` KV cache is only used
   where it is needed: the "10x slower" measurement came from the runs on the iGPU, and at 64k it is what lets the
   cache fit into RAM at all.
+  **Unsloth presets** (`unsloth/*-GGUF`): Qwen3.6-35B-A3B at UD-Q3_K_XL (16.9 GB, the default model in another
+  quant), Qwen3-Coder-30B-A3B at UD-Q3_K_XL (13.8 GB, the coder MoE with ~3 GB more room for Windows) and
+  Qwen3.5-4B at Q4_K_M (2.6 GB). Their Qwen/Gemma repos ship an `mmproj` next to the GGUFs and `hf-repo`
+  downloads it along with the weights, so these presets answer image prompts too: a 128x128 red JPEG came back
+  as `{"colour": "red"}`, i.e. the caption/rating calls can run on the router instead of OpenRouter or Ollama
+  (`no-mmproj-offload` keeps the projector in RAM). Measured through the preset on the RTX 3060, same prompt as
+  the spec-type table below: the 4B does 16 tokens/s on the edit, 13 on its repeat and 12 on fresh text - not
+  faster than the E4B, because Vulkan hands this model's attention over the KV rows to the CPU
+  ("Flash Attention over K/V rows is assigned to device CPU" in its log); `n-gpu-layers = 99` plus
+  `flash-attn = on` are what lift it from the 7.4 tokens/s llama.cpp picks by itself. The router names a preset
+  after repo + quant, for the dynamic quants without the `UD-` prefix (`unsloth/Qwen3.6-35B-A3B-GGUF:Q3_K_XL`),
+  so the `[section]` name has to match that id or `POST /models/load` cannot find the preset.
   "Set up Pi + OpenCode" adds the `llama-cpp` provider to `%USERPROFILE%\.pi\agent\models.json` and
   `%USERPROFILE%\.config\opencode\opencode.json`, and enables `providerInstances.pi` in T3 Code's
   `%USERPROFILE%\.t3\userdata\settings.json`. In T3 Code pick provider **Pi**, model
