@@ -426,6 +426,16 @@ Large models spill into system RAM / the pagefile. Close other apps and keep the
   The context size is a picker on the Coding page (`LLAMA_CPP_CTX` in .env, default 65536; also `96k`, `128k`
   ...): the GUI starts the router with `--ctx-size` and writes the same value to Pi's/OpenCode's model entry. A
   router that is already running keeps its context - Stop router, then Start router. A bigger context needs more RAM.
+  **Speculative decoding** (`--spec-type` in `config\llama-models.ini`), measured on Nemotron-3.5-Bolt-E4B-Q4_K_M on
+  the RTX 3060, printing a 420-token Rust file back with one change (~88% of draft tokens accepted); fresh text is
+  a 78-token story prompt, which has nothing to draft from:
+    - `none` (baseline): not measured - the server closed the connection on the first request
+    - `ngram-simple`: 83 tokens/s edit, 36 tokens/s repeat, 13.6 tokens/s fresh
+    - `ngram-mod` (default): 53 tokens/s edit, 84 tokens/s repeat, 12.7 tokens/s fresh
+    - `ngram-map-k4v`: 64 tokens/s edit, 65 tokens/s repeat, 12.5 tokens/s fresh
+    - `ngram-cache`: 18 tokens/s edit, 17 tokens/s repeat, 11.2 tokens/s fresh (slower than the others, not used)
+  **ngram-mod** wins where the request re-uses text already in the conversation (printing a file back with one edit,
+  re-quoting code); fresh text stays ~12-13 tokens/s for every spec type since there is nothing to draft from.
   **Tools with local models**: T3 Code declares all its ~85 `mcp__t3-code__*` tools (~29k tokens of schemas) to
   every `openai-completions` model, which is every local one. With Pi's ~3.5k system prompt that is ~33k tokens
   before the task: the 8B heretic's 40k context had 1.9k left for the answer (it ran out while thinking, no tool
