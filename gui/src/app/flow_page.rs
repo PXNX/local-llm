@@ -11,7 +11,8 @@ use crate::icons;
 use crate::highlight;
 use crate::jobs::{self, JobHandle, Launch, Level, Line, State};
 use crate::sys;
-use crate::ui::{self, AMBER, GREEN, RED};
+use crate::theme;
+use crate::ui::{self, amber, green, red};
 
 impl App {
     pub(super) fn flow_page(&mut self, ui: &mut egui::Ui, id: FlowId) {
@@ -21,38 +22,51 @@ impl App {
             (f.title(), f.blurb())
         };
         ui.horizontal(|ui| {
-            let c = ui.visuals().strong_text_color();
-            ui.add(id.icon().image(26.0, c));
-            ui.heading(title);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+            ui.painter().circle_filled(rect.center(), 15.0, theme::accent_soft());
+            id.icon().image(19.0, ui::accent()).paint_at(ui, egui::Rect::from_center_size(rect.center(), egui::vec2(19.0, 19.0)));
+            ui.add_space(2.0);
+            ui.label(RichText::new(title).size(21.0).color(theme::text()));
             if self.ready(id) {
-                ui::status(ui, icons::CHECK_CIRCLE, GREEN, "ready");
+                ui::pill(ui, "ready", green());
             } else {
-                ui::status(ui, icons::ALERT, AMBER, "needs setup");
+                ui::pill(ui, "needs setup", amber());
             }
         });
-        ui.label(RichText::new(blurb).weak());
-        ui.add_space(4.0);
+        ui.add_space(1.0);
+        ui.label(RichText::new(blurb).size(13.0).color(theme::muted()));
+        ui.add_space(8.0);
         self.presets_row(ui, id);
         ui.add_space(6.0);
 
         let (env, models) = self.missing(&self.needs(id));
         if !env.is_empty() || !models.is_empty() {
             let mut open = false;
-            egui::Frame::group(ui.style()).stroke(egui::Stroke::new(1.0, AMBER)).inner_margin(10.0).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui::icon(ui, icons::WRENCH, AMBER);
-                    let mut parts = Vec::new();
-                    if !env.is_empty() {
-                        parts.push(format!("{} setting(s) to fill in", env.len()));
-                    }
-                    if !models.is_empty() {
-                        let r = self.repo.as_ref().expect("repo");
-                        parts.push(format!("{} model file(s) to download ({})", models.len(), sys::human(r.models.missing_bytes(&models))));
-                    }
-                    ui.label(format!("Before the first run: {}.", parts.join(" and ")));
-                    open = ui::button(ui, icons::WRENCH, "Set up now").clicked();
+            egui::Frame::new()
+                .fill(theme::surface())
+                .stroke(egui::Stroke::new(1.0, amber()))
+                .corner_radius(theme::RADIUS)
+                .inner_margin(12)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        ui::icon(ui, icons::WRENCH, amber());
+                        let mut parts = Vec::new();
+                        if !env.is_empty() {
+                            parts.push(format!("{} setting(s) to fill in", env.len()));
+                        }
+                        if !models.is_empty() {
+                            let r = self.repo.as_ref().expect("repo");
+                            parts.push(format!(
+                                "{} model file(s) to download ({})",
+                                models.len(),
+                                sys::human(r.models.missing_bytes(&models))
+                            ));
+                        }
+                        ui.label(format!("Before the first run: {}.", parts.join(" and ")));
+                        open = ui::button(ui, icons::WRENCH, "Set up now").clicked();
+                    });
                 });
-            });
             if open {
                 self.prompt = Some(id);
             }
@@ -60,7 +74,17 @@ impl App {
         }
 
         let job = self.jobs.get(&id).cloned();
-        egui::Panel::bottom(egui::Id::new(("run", id))).resizable(true).default_size(280.0).min_size(120.0).show(ui, |ui| {
+        egui::Panel::bottom(egui::Id::new(("run", id)))
+            .resizable(true)
+            .default_size(280.0)
+            .min_size(120.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::chrome())
+                    .inner_margin(egui::Margin::symmetric(16, 10))
+                    .stroke(egui::Stroke::new(1.0, theme::border())),
+            )
+            .show(ui, |ui| {
             ui.add_space(6.0);
             ui::step(ui, 2, "Run");
             self.run_bar(ui, id, job.as_ref());
@@ -102,7 +126,7 @@ impl App {
                 }
             }
             if let Err(e) = &args {
-                ui::status(ui, icons::INFORMATION_OUTLINE, AMBER, e.as_str());
+                ui::status(ui, icons::INFORMATION_OUTLINE, amber(), e.as_str());
             }
             if queued > 0 {
                 open_queue = ui.link(format!("{queued} of these waiting in the queue")).clicked();
@@ -284,7 +308,7 @@ impl App {
             ui.label("Progress made so far is lost.");
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, RED), RichText::new("Cancel the run").color(RED))).clicked()
+                if ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, red()), RichText::new("Cancel the run").color(red()))).clicked()
                 {
                     cancel = true;
                 }
@@ -307,7 +331,7 @@ impl App {
 }
 
 pub(super) fn cancel_button(ui: &mut egui::Ui) -> bool {
-    ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, RED), RichText::new("Cancel").color(RED))).clicked()
+    ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, red()), RichText::new("Cancel").color(red()))).clicked()
 }
 
 /// Progress bar while running, else how the run ended.
@@ -326,21 +350,21 @@ pub(super) fn run_status(ui: &mut egui::Ui, h: &JobHandle, history: Option<&Hash
                 (None, None) => j.current_step.clone().unwrap_or_else(|| "working".into()),
             };
             let text = format!("{what} · {time}{}", eta.map(|e| format!(" · about {} left", mmss(e))).unwrap_or_default());
-            ui::progress(ui, frac, width.max(160.0), &text, ui::ACCENT);
+            ui::progress(ui, frac, width.max(160.0), &text, ui::accent());
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
         State::Finished(0) => {
-            ui::status(ui, icons::CHECK_CIRCLE, GREEN, format!("done in {time}"));
+            ui::status(ui, icons::CHECK_CIRCLE, green(), format!("done in {time}"));
         }
         State::Finished(code) => {
-            ui::status(ui, icons::ALERT_CIRCLE, RED, format!("failed (exit code {code}) after {time}"))
+            ui::status(ui, icons::ALERT_CIRCLE, red(), format!("failed (exit code {code}) after {time}"))
                 .on_hover_text("the flow's log says why");
         }
         State::Failed(e) => {
-            ui::status(ui, icons::ALERT_CIRCLE, RED, e);
+            ui::status(ui, icons::ALERT_CIRCLE, red(), e);
         }
         State::Cancelled => {
-            ui::status(ui, icons::STOP, AMBER, format!("cancelled after {time}"));
+            ui::status(ui, icons::STOP, amber(), format!("cancelled after {time}"));
         }
     }
 }
@@ -385,8 +409,8 @@ fn log_line(ui: &mut egui::Ui, line: &Line) {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.add(egui::Label::new(RichText::new(format!("{} ", line.time)).monospace().weak()));
         let base = match line.level {
-            Level::Error => Some(RED),
-            Level::Warn => Some(AMBER),
+            Level::Error => Some(red()),
+            Level::Warn => Some(amber()),
             Level::Info => None,
         };
         let dark = ui.visuals().dark_mode;

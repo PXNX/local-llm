@@ -17,6 +17,7 @@ mod paths;
 mod servers;
 mod sys;
 mod taskbar;
+mod theme;
 mod tray;
 mod ui;
 

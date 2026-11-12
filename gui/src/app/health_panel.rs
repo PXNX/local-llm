@@ -4,16 +4,13 @@ use super::App;
 use crate::health;
 use crate::icons::{self, Icon};
 use crate::sys::human;
-use crate::ui::{self, AMBER};
+use crate::ui::{self, amber};
 
 impl App {
     /// CPU / RAM / GPU / VRAM, sampled every 2 s in the background (shown on the Start page).
     pub(super) fn health_section(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add(icons::HEART_PULSE.image(20.0, ui::ACCENT));
-            ui.label(RichText::new("System").strong().size(16.0));
-        });
         ui::card(ui, |ui| {
+            ui::card_title(ui, icons::HEART_PULSE, "System", Some("sampled every 2 s"));
             let Some(s) = self.health.latest() else {
                 ui.label(RichText::new("measuring...").weak());
                 return;
@@ -52,7 +49,7 @@ impl App {
                             "The NVIDIA driver is older than {} - ComfyUI needs a newer one (get it here)",
                             health::MIN_DRIVER
                         ))
-                        .color(AMBER),
+                        .color(amber()),
                         "https://www.nvidia.com/en-us/drivers/",
                     ));
                 }

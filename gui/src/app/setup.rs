@@ -10,7 +10,7 @@ use crate::models::Dl;
 use crate::models::Task;
 use crate::paths;
 use crate::sys;
-use crate::ui::{self, AMBER, GREEN};
+use crate::ui::{self, amber, green};
 
 pub const REPO_WEB: &str = "https://github.com/PXNX/local-llm";
 pub const REPO_URL: &str = const_format::concatcp!(REPO_WEB, ".git");
@@ -30,7 +30,7 @@ impl App {
             ui.set_width(560.0);
             ui.heading(format!("Set up {title}"));
             if env.is_empty() && models.is_empty() {
-                ui::status(ui, icons::CHECK_CIRCLE, GREEN, "Everything this flow needs is ready.");
+                ui::status(ui, icons::CHECK_CIRCLE, green(), "Everything this flow needs is ready.");
             }
 
             if !env.is_empty() {
@@ -81,10 +81,10 @@ impl App {
                             }
                             Some(Dl::Running { done, total, .. }) => {
                                 let frac = total.map(|t| done as f32 / t.max(1) as f32);
-                                ui::progress(ui, frac, 160.0, "", ui::ACCENT);
+                                ui::progress(ui, frac, 160.0, "", ui::accent());
                             }
                             Some(Dl::Failed(e)) => {
-                                ui.colored_label(AMBER, e.clone()).on_hover_text(e);
+                                ui.colored_label(amber(), e.clone()).on_hover_text(e);
                             }
                             None => {
                                 let (icon, text, color) = status_text(&r.models.status(m));
@@ -107,7 +107,7 @@ impl App {
                     .weak(),
                 );
                 if free.is_some_and(|f| f < bytes) {
-                    ui.colored_label(AMBER, "Not enough free space - choose another models folder in Settings.");
+                    ui.colored_label(amber(), "Not enough free space - choose another models folder in Settings.");
                 }
                 if r.models.needs_token(&models) && !r.env.is_set("HF_TOKEN") {
                     ui.horizontal(|ui| {
@@ -174,40 +174,64 @@ impl App {
 
     /// First start: no local-llm checkout found next to the exe.
     pub(super) fn setup_screen(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(40.0);
+        use crate::theme;
+        ui.add_space(56.0);
         ui.vertical_centered(|ui| {
-            ui.heading("Where is your local-llm folder?");
-            ui.add_space(8.0);
-            ui.label("This app runs the flows of a local-llm checkout (scripts, ComfyUI, models).");
-            ui.add_space(16.0);
-            if ui.button("Choose the local-llm folder...").clicked()
-                && let Some(dir) = rfd::FileDialog::new().pick_folder()
-            {
-                if paths::is_repo(&dir) {
-                    self.open_repo(dir);
-                } else {
-                    self.notify(format!("{} is not a local-llm checkout (stickers/make_stickers.py missing)", dir.display()), true);
-                }
-            }
-            ui.add_space(8.0);
-            let cloning = self.launched.busy("git-clone", std::time::Duration::ZERO);
-            if ui.add_enabled(!cloning, egui::Button::new("Download it from GitHub into...")).on_disabled_hover_text("cloning - see its window").clicked()
-                && let Some(parent) = rfd::FileDialog::new().set_title("Folder to clone local-llm into").pick_folder()
-            {
-                let target = parent.join("local-llm");
-                let mut cmd = Command::new("git");
-                cmd.args(["clone", REPO_URL]).arg(&target);
-                sys::new_console(&mut cmd);
-                match self.launched.spawn("git-clone", &mut cmd, std::time::Duration::ZERO) {
-                    Ok(_) => {
-                        self.cfg.repo = Some(target.clone());
-                        self.notify(format!("Cloning into {} - then run setup.bat there (Settings)", target.display()), false);
+            ui.label(RichText::new("local-llm").size(30.0).color(theme::text()));
+            ui.label(RichText::new("One window for every flow of your local-llm checkout.").color(theme::muted()));
+        });
+        ui.add_space(22.0);
+        let width = ui.available_width().min(560.0);
+        let margin = ((ui.available_width() - width) / 2.0).max(0.0);
+        ui.horizontal(|ui| {
+            ui.add_space(margin);
+            ui.allocate_ui(egui::vec2(width, 0.0), |ui| {
+                ui::card(ui, |ui| {
+                    ui.label(RichText::new("Where is your local-llm folder?").size(16.0).color(theme::text()));
+                    ui.label(
+                        RichText::new("This app runs the flows of a local-llm checkout: the scripts, ComfyUI and the models folder.")
+                            .color(theme::muted()),
+                    );
+                    ui.add_space(12.0);
+                    if ui.button("Choose the local-llm folder...").clicked()
+                        && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                    {
+                        if paths::is_repo(&dir) {
+                            self.open_repo(dir);
+                        } else {
+                            self.notify(
+                                format!("{} is not a local-llm checkout (stickers/make_stickers.py missing)", dir.display()),
+                                true,
+                            );
+                        }
                     }
-                    Err(e) => self.notify(format!("git not found ({e}) - install Git for Windows"), true),
-                }
-            }
-            ui.add_space(12.0);
-            self.notice_ui(ui);
+                    ui.add_space(8.0);
+                    let cloning = self.launched.busy("git-clone", std::time::Duration::ZERO);
+                    if ui
+                        .add_enabled(!cloning, egui::Button::new("Download it from GitHub into..."))
+                        .on_disabled_hover_text("cloning - see its window")
+                        .clicked()
+                        && let Some(parent) = rfd::FileDialog::new().set_title("Folder to clone local-llm into").pick_folder()
+                    {
+                        let target = parent.join("local-llm");
+                        let mut cmd = Command::new("git");
+                        cmd.args(["clone", REPO_URL]).arg(&target);
+                        sys::new_console(&mut cmd);
+                        match self.launched.spawn("git-clone", &mut cmd, std::time::Duration::ZERO) {
+                            Ok(_) => {
+                                self.cfg.repo = Some(target.clone());
+                                self.notify(
+                                    format!("Cloning into {} - then run setup.bat there (Settings)", target.display()),
+                                    false,
+                                );
+                            }
+                            Err(e) => self.notify(format!("git not found ({e}) - install Git for Windows"), true),
+                        }
+                    }
+                    ui.add_space(10.0);
+                    self.notice_ui(ui.ctx());
+                });
+            });
         });
     }
 }

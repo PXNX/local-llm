@@ -1,13 +1,11 @@
-//! Small shared widgets: icon buttons, status lines, cards.
+//! Small shared widgets: icon buttons, status lines, cards, page headers and tiles.
 
 use eframe::egui::{self, Color32, Response, RichText};
 
 use crate::icons::Icon;
+use crate::theme::{self, muted, text};
 
-pub const GREEN: Color32 = Color32::from_rgb(90, 190, 110);
-pub const AMBER: Color32 = Color32::from_rgb(230, 170, 60);
-pub const RED: Color32 = Color32::from_rgb(230, 90, 80);
-pub const ACCENT: Color32 = Color32::from_rgb(70, 130, 220);
+pub use crate::theme::{accent, amber, green, red};
 
 pub fn icon(ui: &mut egui::Ui, icon: Icon, color: Color32) -> Response {
     ui.add(icon.image(16.0, color))
@@ -26,7 +24,7 @@ pub fn button_enabled(ui: &mut egui::Ui, enabled: bool, icon: Icon, text: &str) 
 /// The one big button of a page.
 pub fn primary(ui: &mut egui::Ui, enabled: bool, icon: Icon, text: &str) -> Response {
     let b = egui::Button::image_and_text(icon.image(18.0, Color32::WHITE), RichText::new(text).strong().size(15.0).color(Color32::WHITE))
-        .fill(ACCENT)
+        .fill(accent())
         .min_size(egui::vec2(140.0, 34.0));
     ui.add_enabled(enabled, b)
 }
@@ -46,9 +44,11 @@ pub fn status(ui: &mut egui::Ui, icon: Icon, color: Color32, text: impl Into<Str
 }
 
 pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    egui::Frame::group(ui.style())
-        .inner_margin(12.0)
-        .corner_radius(6.0)
+    egui::Frame::new()
+        .fill(theme::surface())
+        .stroke(egui::Stroke::new(1.0, theme::border()))
+        .corner_radius(theme::RADIUS)
+        .inner_margin(theme::CARD_MARGIN)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
@@ -56,15 +56,124 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
         .inner
 }
 
+/// A card's title row: icon, title, then whatever else the card wants on that row.
+pub fn card_title_with(ui: &mut egui::Ui, icon: Icon, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.add(icon.image(18.0, accent()));
+        ui.label(RichText::new(title).size(15.5).color(text()));
+        add(ui);
+    });
+    ui.add_space(2.0);
+}
+
+/// A card's title row with an optional one-line hint on the right.
+pub fn card_title(ui: &mut egui::Ui, icon: Icon, title: &str, hint: Option<&str>) {
+    card_title_with(ui, icon, title, |ui| {
+        if let Some(hint) = hint {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(hint).small().color(muted()));
+            });
+        }
+    });
+}
+
+/// The top of every page: icon, title, one line that says what the page is for.
+pub fn page_header(ui: &mut egui::Ui, icon: Icon, title: &str, subtitle: &str) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), 15.0, theme::accent_soft());
+        icon.image(19.0, accent()).paint_at(ui, egui::Rect::from_center_size(rect.center(), egui::vec2(19.0, 19.0)));
+        ui.add_space(2.0);
+        ui.label(RichText::new(title).size(21.0).color(text()));
+    });
+    ui.add_space(1.0);
+    ui.label(RichText::new(subtitle).size(13.0).color(muted()));
+    ui.add_space(10.0);
+}
+
+/// A small rounded label ("ready", "2 waiting").
+pub fn pill(ui: &mut egui::Ui, text: impl Into<String>, color: Color32) -> Response {
+    let text = text.into();
+    let font = egui::FontId::proportional(11.5);
+    let galley = ui.painter().layout_no_wrap(text, font, color);
+    let padding = egui::vec2(8.0, 3.0);
+    let size = galley.size() + padding * 2.0;
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect_filled(rect, size.y / 2.0, color.gamma_multiply(0.18));
+        ui.painter().galley(rect.min + padding, galley, color);
+    }
+    response
+}
+
+/// A clickable card for the start page: icon, title, one line of what it makes, and a status pill.
+/// The caller passes the width - inside a grid the available width is the whole row, not the cell.
+/// Returns true when clicked.
+pub fn tile(ui: &mut egui::Ui, width: f32, icon: Icon, title: &str, blurb: &str, status: Option<(&str, Color32)>, selected: bool) -> bool {
+    let height = 74.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if !ui.is_rect_visible(rect) {
+        return response.clicked();
+    }
+    let hovered = response.hovered() || selected;
+    let fill = if hovered { theme::surface_high() } else { theme::surface() };
+    let stroke = if selected {
+        egui::Stroke::new(1.5, accent())
+    } else if response.hovered() {
+        egui::Stroke::new(1.0, theme::accent_dim())
+    } else {
+        egui::Stroke::new(1.0, theme::border())
+    };
+    let painter = ui.painter();
+    painter.rect(rect, theme::RADIUS, fill, stroke, egui::StrokeKind::Inside);
+    let icon_rect = egui::Rect::from_min_size(rect.min + egui::vec2(16.0, 18.0), egui::vec2(26.0, 26.0));
+    icon.image(24.0, if hovered { accent() } else { muted() }).paint_at(ui, icon_rect);
+    let left = rect.left() + 54.0;
+    let right = rect.right() - 16.0;
+    painter.text(
+        egui::pos2(left, rect.top() + 16.0),
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(15.0),
+        text(),
+    );
+    let mut job = egui::text::LayoutJob::simple_singleline(blurb.to_owned(), egui::FontId::proportional(12.5), muted());
+    job.wrap = egui::text::TextWrapping::truncate_at_width((right - left).max(40.0) - 70.0);
+    let galley = ui.painter().layout_job(job);
+    painter.galley(egui::pos2(left, rect.top() + 40.0), galley, muted());
+    if let Some((label, color)) = status {
+        let galley = painter.layout_no_wrap(label.to_owned(), egui::FontId::proportional(11.5), color);
+        let size = galley.size() + egui::vec2(16.0, 6.0);
+        let pill = egui::Rect::from_min_size(egui::pos2(right - size.x, rect.top() + 14.0), size);
+        painter.rect_filled(pill, size.y / 2.0, color.gamma_multiply(0.18));
+        painter.galley(pill.min + egui::vec2(8.0, 3.0), galley, color);
+    }
+    response.clicked()
+}
+
+
 /// Numbered section heading ("1  Choose a photo").
 pub fn step(ui: &mut egui::Ui, n: u32, text: &str) {
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
-        ui.painter().circle_filled(rect.center(), 11.0, ACCENT);
+        ui.painter().circle_filled(rect.center(), 11.0, accent());
         ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, n.to_string(), egui::FontId::proportional(13.0), Color32::WHITE);
         ui.label(RichText::new(text).strong().size(15.0));
     });
     ui.add_space(4.0);
+}
+
+/// The same, smaller, with room on the right for the button the step is about.
+pub fn step_with(ui: &mut egui::Ui, n: u32, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), 10.0, theme::accent_soft());
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, n.to_string(), egui::FontId::proportional(12.0), accent());
+        ui.label(RichText::new(label).size(13.0).color(text()));
+        add(ui);
+    });
+    ui.add_space(2.0);
 }
 
 /// Painted, because the default fonts have no filled-circle glyph.
@@ -137,10 +246,10 @@ pub fn progress(ui: &mut egui::Ui, frac: Option<f32>, width: f32, text: &str, fi
 
 pub fn level_color(frac: f32) -> Color32 {
     if frac > 0.9 {
-        RED
+        red()
     } else if frac > 0.7 {
-        AMBER
+        amber()
     } else {
-        GREEN
+        green()
     }
 }

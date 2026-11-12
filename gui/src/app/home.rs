@@ -9,22 +9,58 @@ use crate::health;
 use crate::icons;
 use crate::models::Task;
 use crate::sys;
-use crate::ui::{self, AMBER, GREEN};
+use crate::ui::{self, amber, green};
 
 impl App {
-    /// Start page: what runs (short), what is missing, how the machine is doing.
+    /// Start page: the flows as tiles, what is still missing, how the machine is doing.
     pub(super) fn home_page(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.heading("Start");
-            ui.label(
-                RichText::new("Pick something to make on the left. Anything still missing is listed here - one click fixes it.").weak(),
+            ui::page_header(
+                ui,
+                icons::HOME,
+                "Start",
+                "Pick a flow below or in the sidebar. Anything a flow is missing is listed further down - one click fixes it.",
             );
-            ui.add_space(10.0);
             self.queue_summary(ui);
+            self.flow_tiles(ui);
+            ui.add_space(12.0);
             self.checklist(ui);
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             self.health_section(ui);
         });
+    }
+
+    /// Every flow as a clickable card, two per row, with what it needs before it can run.
+    fn flow_tiles(&mut self, ui: &mut egui::Ui) {
+        let mut pick = None;
+        let gap = 10.0;
+        let width = ((ui.available_width() - gap) / 2.0).floor().max(200.0);
+        for row in FlowId::ALL.chunks(2) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for id in row {
+                    let (title, text) = {
+                        let form = self.cfg.forms.get(*id);
+                        (form.title(), form.blurb())
+                    };
+                    let (env, models) = self.missing(&self.needs(*id));
+                    let missing = env.len() + models.len();
+                    let status = if missing == 0 {
+                        ("ready", green())
+                    } else {
+                        ("needs setup", amber())
+                    };
+                    let selected = self.cfg.page == Page::Flow(*id);
+                    if ui::tile(ui, width, id.icon(), title, text, Some(status), selected) {
+                        pick = Some(*id);
+                    }
+                }
+            });
+            ui.add_space(gap);
+        }
+        if let Some(id) = pick {
+            self.select(Page::Flow(id));
+        }
     }
 
     fn checklist(&mut self, ui: &mut egui::Ui) {
@@ -48,17 +84,16 @@ impl App {
 
         let mut action = None;
         ui::card(ui, |ui| {
-            ui.label(RichText::new("Setup").strong().size(16.0));
-            ui.add_space(4.0);
+            ui::card_title(ui, icons::WRENCH, "Setup", Some("one click fixes each"));
             let row = |ui: &mut egui::Ui, ok: bool, optional: bool, title: &str, detail: String, button: Option<&str>| -> bool {
                 let mut clicked = false;
                 ui.horizontal(|ui| {
                     let (icon, color) = if ok {
-                        (icons::CHECK_CIRCLE, GREEN)
+                        (icons::CHECK_CIRCLE, green())
                     } else if optional {
-                        (icons::INFORMATION_OUTLINE, AMBER)
+                        (icons::INFORMATION_OUTLINE, amber())
                     } else {
-                        (icons::ALERT_CIRCLE, AMBER)
+                        (icons::ALERT_CIRCLE, amber())
                     };
                     ui.add(icon.image(20.0, color));
                     ui.vertical(|ui| {

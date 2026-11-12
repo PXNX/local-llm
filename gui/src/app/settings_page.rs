@@ -5,7 +5,7 @@ use std::sync::Arc;
 use eframe::egui::{self, RichText};
 
 use super::{App, FreeModels, or_default, setup};
-use crate::envfile::{self, EnvVar};
+use crate::envfile;
 use crate::flows::Provider;
 use crate::health;
 use crate::icons;
@@ -13,22 +13,37 @@ use crate::paths;
 use crate::servers::Server;
 use crate::sys;
 use crate::taskbar::sound::{self, Cue};
-use crate::ui::{self, AMBER, GREEN, RED};
+use crate::theme;
+use crate::ui::{self, amber, green, red};
+
+/// Result of the "Check" button next to the OpenRouter key (checked against the API, in a thread).
+#[derive(Clone, Default)]
+pub(super) enum KeyCheck {
+    #[default]
+    Idle,
+    Checking,
+    Ok(String),
+    Failed(String),
+}
 
 impl App {
     pub(super) fn settings_page(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.heading("Settings");
-            ui.label(
-                RichText::new(
-                    "Keys and passwords are saved in the .env file of the local-llm folder. It is git-ignored, so it is never uploaded.",
-                )
-                .weak(),
+            ui::page_header(
+                ui,
+                icons::COG,
+                "Settings",
+                "Keys and passwords are saved in the .env file of the local-llm folder. It is git-ignored, so it is never uploaded.",
             );
+            ui::card(ui, |ui| self.appearance_settings(ui));
             ui.add_space(8.0);
             ui::card(ui, |ui| self.llm_settings(ui));
             ui.add_space(8.0);
-            ui::card(ui, |ui| self.secret_settings(ui));
+            ui::card(ui, |ui| self.openrouter_settings(ui));
+            ui.add_space(8.0);
+            ui::card(ui, |ui| self.telegram_settings(ui));
+            ui.add_space(8.0);
+            ui::card(ui, |ui| self.huggingface_settings(ui));
             ui.add_space(8.0);
             ui::card(ui, |ui| self.queue_settings(ui));
             ui.add_space(8.0);
@@ -36,6 +51,40 @@ impl App {
             ui.add_space(8.0);
             ui::card(ui, |ui| self.install_settings(ui));
         });
+    }
+
+    fn appearance_settings(&mut self, ui: &mut egui::Ui) {
+        ui::card_title(ui, icons::PALETTE, "Appearance", Some("saved with the window"));
+        ui.horizontal(|ui| {
+            let mut mode = theme::mode();
+            for (m, icon, text) in [
+                (theme::Mode::Dark, icons::WEATHER_NIGHT, "Dark"),
+                (theme::Mode::Light, icons::WEATHER_SUNNY, "Light"),
+            ] {
+                let selected = mode == m;
+                let fg = if selected { egui::Color32::WHITE } else { ui.visuals().text_color() };
+                let button = egui::Button::image_and_text(icon.image(18.0, fg), RichText::new(text).color(fg))
+                    .fill(if selected { ui::accent() } else { ui.visuals().widgets.inactive.bg_fill })
+                    .corner_radius(8)
+                    .min_size(egui::vec2(132.0, 34.0));
+                if ui.add(button).clicked() && !selected {
+                    mode = m;
+                    theme::set_mode(ui.ctx(), m);
+                    self.cfg.dark = m == theme::Mode::Dark;
+                    self.save_config();
+                }
+            }
+            ui.label(RichText::new("switch any time - nothing else changes").small().color(theme::muted()));
+        });
+    }
+
+    /// Green "connected" pill, or an amber one that says what is still missing.
+    fn connect_pill(ui: &mut egui::Ui, ok: bool, done: &str, missing: &str) {
+        if ok {
+            ui::pill(ui, done, green());
+        } else {
+            ui::pill(ui, missing, amber());
+        }
     }
 
     fn queue_settings(&mut self, ui: &mut egui::Ui) {
@@ -54,28 +103,7 @@ impl App {
     }
 
     fn section(ui: &mut egui::Ui, icon: icons::Icon, title: &str) {
-        ui.horizontal(|ui| {
-            ui.add(icon.image(20.0, ui::ACCENT));
-            ui.label(RichText::new(title).strong().size(16.0));
-        });
-        ui.add_space(4.0);
-    }
-
-    fn env_field(&mut self, ui: &mut egui::Ui, var: &EnvVar) {
-        let Some(r) = &self.repo else { return };
-        let current = r.env.get(var.key);
-        ui.label(var.label).on_hover_text(var.key);
-        ui.vertical(|ui| {
-            let value = self.env_edit.entry(var.key).or_insert(current);
-            ui.add(egui::TextEdit::singleline(value).password(var.secret).desired_width(380.0).hint_text(var.key));
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(var.help).small().weak());
-                if !var.url.is_empty() {
-                    ui.hyperlink_to(RichText::new("get it").small(), var.url);
-                }
-            });
-        });
-        ui.end_row();
+        ui::card_title(ui, icon, title, None);
     }
 
     fn text_field(&mut self, ui: &mut egui::Ui, key: &'static str, label: &str, default: &str, help: &str) {
@@ -90,20 +118,63 @@ impl App {
         ui.end_row();
     }
 
+    /// A key / password field: masked unless the eye was clicked, monospace so nothing is easy to misread.
+    fn secret_field(&mut self, ui: &mut egui::Ui, key: &'static str, hint: &str, width: f32) {
+        let Some(r) = &self.repo else { return };
+        let saved = r.env.get(key);
+        let secret = envfile::var(key).is_none_or(|v| v.secret);
+        let shown = self.revealed.contains(key);
+        let mut toggle = false;
+        ui.horizontal(|ui| {
+            let value = self.env_edit.entry(key).or_insert_with(|| saved.clone());
+            ui.add(
+                egui::TextEdit::singleline(value)
+                    .password(secret && !shown)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(width)
+                    .hint_text(hint),
+            );
+            if secret {
+                let (icon, tip) = if shown { (icons::EYE_OFF, "hide it again") } else { (icons::EYE, "show what is typed") };
+                if ui::tool(ui, icon, tip).clicked() {
+                    toggle = true;
+                }
+            }
+        });
+        if toggle {
+            if shown {
+                self.revealed.remove(key);
+            } else {
+                self.revealed.insert(key);
+            }
+        }
+    }
+
+    /// The value as it would be saved right now: what is typed in the field, else what is in `.env`.
+    fn edited(&self, key: &'static str) -> String {
+        let saved = self.repo.as_ref().map(|r| r.env.get(key)).unwrap_or_default();
+        self.env_edit.get(key).cloned().unwrap_or(saved)
+    }
+
     fn save_button(&mut self, ui: &mut egui::Ui) {
         let Some(r) = &self.repo else { return };
         let changed: Vec<(&'static str, String)> =
             self.env_edit.iter().filter(|(k, v)| r.env.get(k) != v.trim()).map(|(k, v)| (*k, v.clone())).collect();
         let env_file = r.paths.env_file();
+        let count = changed.len();
         ui.horizontal(|ui| {
-            if ui::button_enabled(ui, !changed.is_empty(), icons::CHECK_CIRCLE, "Save").clicked() {
+            let text = if count > 1 { format!("Save {count} changes") } else { "Save".to_owned() };
+            if ui::button_enabled(ui, count > 0, icons::CHECK_CIRCLE, &text).clicked() {
                 self.save_env(&changed);
                 self.env_edit.clear();
+            }
+            if count > 0 {
+                ui.label(RichText::new("not saved yet").small().color(amber()));
             }
             if ui::tool(ui, icons::FILE_DOCUMENT_EDIT, "open .env in the editor").clicked() {
                 sys::open(&env_file);
             }
-            ui::icon(ui, icons::SHIELD_LOCK, GREEN).on_hover_text(".env is git-ignored");
+            ui::icon(ui, icons::SHIELD_LOCK, green()).on_hover_text(".env is git-ignored");
         });
     }
 
@@ -120,10 +191,17 @@ impl App {
         if provider != llm.provider {
             self.save_env(&[("LLM_PROVIDER", provider.env_value().into())]);
         }
+        if provider == Provider::OpenRouter {
+            let connected = self.repo.as_ref().is_some_and(|r| r.env.is_set("OPENROUTER_API_KEY"));
+            if connected {
+                ui::status(ui, icons::CLOUD_CHECK, green(), "key saved - models below, the key itself is in the OpenRouter card");
+            } else {
+                ui::status(ui, icons::ALERT_CIRCLE, amber(), "no OpenRouter key yet - paste it in the OpenRouter card below");
+            }
+            ui.add_space(4.0);
+        }
         egui::Grid::new("llm").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
             if provider == Provider::OpenRouter {
-                self.env_field(ui, envfile::var("OPENROUTER_API_KEY").expect("known var"));
-                self.openrouter_model_field(ui);
                 self.text_field(
                     ui,
                     "OPENROUTER_FALLBACKS",
@@ -183,13 +261,82 @@ impl App {
         self.save_button(ui);
     }
 
-    fn openrouter_model_field(&mut self, ui: &mut egui::Ui) {
+    /// The key that connects the free cloud models: paste, check, done.
+    fn openrouter_settings(&mut self, ui: &mut egui::Ui) {
+        let Some(r) = &self.repo else { return };
+        let saved = r.env.get("OPENROUTER_API_KEY").trim().to_owned();
+        let connected = !saved.is_empty();
+        ui::card_title_with(ui, icons::CLOUD_OUTLINE, "OpenRouter", |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                Self::connect_pill(ui, connected, "connected", "no key yet");
+            });
+        });
+        ui.label(
+            RichText::new(
+                "Free cloud vision models for captions, clip ratings and motion prompts - no GPU memory used. A key takes a minute: log in on openrouter.ai, open Keys, create one and paste it here. The key is only sent to openrouter.ai.",
+            )
+            .small()
+            .color(theme::muted()),
+        );
+        ui.add_space(8.0);
+        ui.label("API key").on_hover_text("OPENROUTER_API_KEY in .env");
+        self.secret_field(ui, "OPENROUTER_API_KEY", "sk-or-v1-...", 380.0);
+        ui.add_space(2.0);
+        if connected {
+            ui.label(RichText::new(format!("saved: {}", mask_key(&saved))).small().color(theme::muted())).on_hover_text("the full key stays in .env");
+        } else {
+            ui.label(RichText::new("nothing saved yet").small().color(theme::muted()));
+        }
+        ui.add_space(6.0);
+        self.save_button(ui);
+        ui.add_space(2.0);
+        self.key_check_ui(ui);
+        ui.add_space(10.0);
+        self.openrouter_model_row(ui);
+    }
+
+    /// "Check key" asks OpenRouter itself, so a typo or an expired key shows up before a flow uses it.
+    fn key_check_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(r) = &self.repo else { return };
+        let saved = r.env.get("OPENROUTER_API_KEY").trim().to_owned();
+        let state = self.key_check.lock().unwrap().clone();
+        ui.horizontal(|ui| {
+            let can = !saved.is_empty() && !matches!(state, KeyCheck::Checking);
+            if ui::button_enabled(ui, can, icons::CLOUD_CHECK, "Check key")
+                .on_hover_text("asks OpenRouter whether the saved key works - save a new key first")
+                .clicked()
+            {
+                *self.key_check.lock().unwrap() = KeyCheck::Checking;
+                check_openrouter_key(saved.clone(), self.key_check.clone(), ui.ctx().clone());
+            }
+            if ui::button(ui, icons::OPEN_IN_NEW, "Get a free key").clicked() {
+                sys::open_url("https://openrouter.ai/keys");
+            }
+            match &state {
+                KeyCheck::Idle => {
+                    ui.label(RichText::new("not checked yet").small().color(theme::muted()));
+                }
+                KeyCheck::Checking => {
+                    ui.spinner();
+                    ui.label(RichText::new("asking openrouter.ai ...").small().color(theme::muted()));
+                }
+                KeyCheck::Ok(text) => {
+                    ui::status(ui, icons::CHECK_CIRCLE, green(), text.as_str());
+                }
+                KeyCheck::Failed(text) => {
+                    ui::status(ui, icons::ALERT_CIRCLE, red(), text.as_str());
+                }
+            }
+        });
+    }
+
+    fn openrouter_model_row(&mut self, ui: &mut egui::Ui) {
         let Some(r) = &self.repo else { return };
         let current = or_default(&r.env.get("OPENROUTER_MODEL"), "qwen/qwen3.8-27b:free");
-        ui.label("Model");
+        ui.label("Model").on_hover_text("OPENROUTER_MODEL in .env");
         ui.horizontal(|ui| {
             let value = self.env_edit.entry("OPENROUTER_MODEL").or_insert(current);
-            ui.add(egui::TextEdit::singleline(value).desired_width(300.0));
+            ui.add(egui::TextEdit::singleline(value).desired_width(300.0).hint_text("qwen/qwen3.8-27b:free"));
             let state = &mut *self.free_models.lock().unwrap();
             match state {
                 FreeModels::Loaded(list) => {
@@ -203,26 +350,94 @@ impl App {
                     ui.spinner();
                 }
                 FreeModels::Failed(e) => {
-                    ui::status(ui, icons::ALERT_CIRCLE, RED, "list failed").on_hover_text(e.as_str());
+                    ui::status(ui, icons::ALERT_CIRCLE, red(), "list failed").on_hover_text(e.as_str());
                 }
                 FreeModels::NotLoaded => {
                     if ui::button(ui, icons::CLOUD_OUTLINE, "List free vision models").clicked() {
                         *state = FreeModels::Loading;
-                        fetch_free_models(self.free_models.clone(), ui.ctx().clone());
+                        let (state, ctx) = (self.free_models.clone(), ui.ctx().clone());
+                        fetch_free_models(state, ctx);
                     }
                 }
             }
         });
-        ui.end_row();
+        ui.label(
+            RichText::new("only models that take images can caption or rate - the :free ones need no credit")
+                .small()
+                .color(theme::muted()),
+        );
     }
 
-    fn secret_settings(&mut self, ui: &mut egui::Ui) {
-        Self::section(ui, icons::KEY, "Accounts");
-        egui::Grid::new("secrets").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            for key in ["TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_PASSWORD", "HF_TOKEN"] {
-                self.env_field(ui, envfile::var(key).expect("known var"));
-            }
+    /// Telegram is a two-value login: everything else (phone, code, 2FA) happens in the flow's login window.
+    fn telegram_settings(&mut self, ui: &mut egui::Ui) {
+        let Some(r) = &self.repo else { return };
+        let complete = telegram_problem(&self.edited("TELEGRAM_API_ID"), &self.edited("TELEGRAM_API_HASH")).is_none();
+        let twofa = !r.env.get("TELEGRAM_PASSWORD").trim().is_empty();
+        ui::card_title_with(ui, icons::SEND, "Telegram", |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                Self::connect_pill(ui, complete, "ready", "not set up");
+            });
         });
+        ui.label(
+            RichText::new("Top 5 videos follows the channels you are in and rates today's clips. It needs your own API ID and hash - both are free and stay in .env.")
+                .small()
+                .color(theme::muted()),
+        );
+        ui.add_space(8.0);
+        ui::step_with(ui, 1, "Open my.telegram.org and log in with your phone number", |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui::button(ui, icons::OPEN_IN_NEW, "my.telegram.org").clicked() {
+                    sys::open_url("https://my.telegram.org");
+                }
+            });
+        });
+        ui::step_with(ui, 2, "API development tools > create an app (any name and platform)", |_| {});
+        ui::step_with(ui, 3, "Copy App api_id and App api_hash below - phone and code are asked on the first run", |_| {});
+        ui.add_space(6.0);
+        egui::Grid::new("telegram").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("api_id").on_hover_text("the number from my.telegram.org");
+            self.secret_field(ui, "TELEGRAM_API_ID", "1234567", 200.0);
+            ui.end_row();
+            ui.label("api_hash").on_hover_text("the 32-character string next to the api_id");
+            self.secret_field(ui, "TELEGRAM_API_HASH", "0123456789abcdef0123456789abcdef", 380.0);
+            ui.end_row();
+            ui.label("2FA password").on_hover_text("TELEGRAM_PASSWORD - only needed with two-step verification");
+            self.secret_field(ui, "TELEGRAM_PASSWORD", "optional", 200.0);
+            ui.end_row();
+        });
+        match telegram_problem(&self.edited("TELEGRAM_API_ID"), &self.edited("TELEGRAM_API_HASH")) {
+            None => {
+                ui::status(ui, icons::CHECK_CIRCLE, green(), "complete - Top 5 videos logs in when it first reads a channel");
+            }
+            Some(problem) => {
+                ui::status(ui, icons::INFORMATION_OUTLINE, amber(), problem);
+            }
+        }
+        ui.add_space(4.0);
+        self.save_button(ui);
+        if complete && !twofa {
+            ui.label(
+                RichText::new("no 2FA password saved - if your account uses one, the login window asks for it once")
+                    .small()
+                    .color(theme::muted()),
+            );
+        }
+    }
+
+    fn huggingface_settings(&mut self, ui: &mut egui::Ui) {
+        ui::card_title(ui, icons::KEY, "Hugging Face", Some("only for gated models"));
+        ui.label(
+            RichText::new("Some checkpoints (FLUX.2 klein) are gated: accept their license on the model page, then paste a read token here so the download can run.")
+                .small()
+                .color(theme::muted()),
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Token");
+            ui.hyperlink_to(RichText::new("huggingface.co/settings/tokens").small(), "https://huggingface.co/settings/tokens");
+        });
+        self.secret_field(ui, "HF_TOKEN", "hf_...", 380.0);
+        ui.add_space(6.0);
         self.save_button(ui);
     }
 
@@ -302,9 +517,9 @@ impl App {
         });
         ui.horizontal(|ui| {
             if python.is_file() {
-                ui::status(ui, icons::CHECK_CIRCLE, GREEN, "ComfyUI + Python installed");
+                ui::status(ui, icons::CHECK_CIRCLE, green(), "ComfyUI + Python installed");
             } else {
-                ui::status(ui, icons::ALERT, AMBER, "ComfyUI + Python not installed yet");
+                ui::status(ui, icons::ALERT, amber(), "ComfyUI + Python not installed yet");
             }
             if ui::button(ui, icons::DOWNLOAD, "Run setup.bat")
                 .on_hover_text("installs Ollama, ComfyUI portable and the Python packages (safe to re-run)")
@@ -326,8 +541,8 @@ impl App {
                     let text =
                         format!("{} · driver {}{}", g.name, g.driver, g.cuda.map(|(a, b)| format!(" · CUDA {a}.{b}")).unwrap_or_default());
                     match health::driver_ok(&g.driver) {
-                        Some(true) => ui::status(ui, icons::CHECK_CIRCLE, GREEN, text),
-                        _ => ui::status(ui, icons::ALERT, AMBER, format!("{text} - ComfyUI needs driver {}+", health::MIN_DRIVER)),
+                        Some(true) => ui::status(ui, icons::CHECK_CIRCLE, green(), text),
+                        _ => ui::status(ui, icons::ALERT, amber(), format!("{text} - ComfyUI needs driver {}+", health::MIN_DRIVER)),
                     };
                     if ui::button(ui, icons::OPEN_IN_NEW, "NVIDIA drivers").clicked() {
                         sys::open_url("https://www.nvidia.com/en-us/drivers/");
@@ -335,7 +550,7 @@ impl App {
                 });
             }
             None => {
-                ui::status(ui, icons::ALERT, AMBER, "no NVIDIA GPU / driver found");
+                ui::status(ui, icons::ALERT, amber(), "no NVIDIA GPU / driver found");
             }
         }
         ui.label(
@@ -368,6 +583,69 @@ impl App {
             Err(e) => self.notify(format!("could not create the shortcut: {e}"), true),
         }
     }
+}
+
+/// `sk-or-v1-…3f9a`: enough to tell two keys apart, never the whole secret.
+fn mask_key(key: &str) -> String {
+    let chars: Vec<char> = key.trim().chars().collect();
+    if chars.len() <= 12 {
+        return "…".to_owned();
+    }
+    let head: String = chars[..6].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}…{tail}")
+}
+
+/// What is still wrong with the two Telegram values, or None when they look usable.
+fn telegram_problem(api_id: &str, api_hash: &str) -> Option<String> {
+    let id = api_id.trim();
+    let hash = api_hash.trim();
+    if id.is_empty() && hash.is_empty() {
+        return Some("nothing entered yet - see the three steps above".to_owned());
+    }
+    if id.is_empty() {
+        return Some("api_id is missing".to_owned());
+    }
+    if !id.chars().all(|c| c.is_ascii_digit()) || !(5..=12).contains(&id.len()) {
+        return Some("api_id is the number from my.telegram.org (5-12 digits, no spaces)".to_owned());
+    }
+    if hash.is_empty() {
+        return Some("api_hash is missing".to_owned());
+    }
+    if hash.len() != 32 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Some("api_hash is the 32-character string next to the api_id".to_owned());
+    }
+    None
+}
+
+/// Asks OpenRouter whether the key works and adds what the answer says about the account.
+fn check_openrouter_key(key: String, state: Arc<std::sync::Mutex<KeyCheck>>, ctx: egui::Context) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<String, String> {
+            let response = ureq::get("https://openrouter.ai/api/v1/key").header("Authorization", &format!("Bearer {key}")).call();
+            let mut resp = match response {
+                Ok(resp) => resp,
+                Err(ureq::Error::StatusCode(401)) => return Err("the key was rejected (401) - create a new one on openrouter.ai".to_owned()),
+                Err(e) => return Err(e.to_string()),
+            };
+            let v: serde_json::Value = resp.body_mut().with_config().limit(1 << 20).read_json().map_err(|e| e.to_string())?;
+            let data = &v["data"];
+            let label = data["label"].as_str().unwrap_or("").trim().to_owned();
+            let tier = if data["is_free_tier"].as_bool().unwrap_or(false) { "free tier" } else { "paid tier" };
+            let mut text = if label.is_empty() { format!("key works · {tier}") } else { format!("key works · {tier} · {label}") };
+            if let (Some(used), Some(limit)) = (data["usage"].as_f64(), data["limit"].as_f64())
+                && limit > 0.0
+            {
+                text.push_str(&format!(" · ${used:.2} of ${limit:.2} used"));
+            }
+            Ok(text)
+        })();
+        *state.lock().unwrap() = match result {
+            Ok(text) => KeyCheck::Ok(text),
+            Err(e) => KeyCheck::Failed(e),
+        };
+        ctx.request_repaint();
+    });
 }
 
 fn fetch_free_models(state: Arc<std::sync::Mutex<FreeModels>>, ctx: egui::Context) {

@@ -7,7 +7,7 @@ mod queue_page;
 mod settings_page;
 mod setup;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -26,8 +26,9 @@ use crate::paths::{self, Paths};
 use crate::servers::{self, Server, Servers};
 use crate::taskbar::sound::{self, Cue};
 use crate::taskbar::{Progress, Taskbar};
+use crate::theme;
 use crate::tray::Tray;
-use crate::ui::{self, AMBER, GREEN, RED};
+use crate::ui::{self, amber, green, red};
 
 /// Repo-bound state, created once the local-llm folder is known.
 pub struct Repo {
@@ -74,6 +75,10 @@ pub struct App {
     allow_close: bool,
     /// Unsaved text typed into env var fields (setup dialog and settings).
     env_edit: HashMap<&'static str, String>,
+    /// Keys whose value is shown un-masked in Settings (the eye button next to the field).
+    revealed: HashSet<&'static str>,
+    /// Answer of the last "Check key" on the OpenRouter card.
+    key_check: Arc<Mutex<settings_page::KeyCheck>>,
     free_models: Arc<Mutex<FreeModels>>,
     notice: Option<(String, bool, Instant)>,
     last_tick: Instant,
@@ -92,9 +97,10 @@ pub enum FreeModels {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let cfg = Config::load();
         egui_extras::install_image_loaders(&cc.egui_ctx);
         crate::fonts::install(&cc.egui_ctx);
-        let cfg = Config::load();
+        crate::theme::install(&cc.egui_ctx, if cfg.dark { theme::Mode::Dark } else { theme::Mode::Light });
         let saved_json = cfg.to_json();
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
@@ -119,6 +125,8 @@ impl App {
             confirm_quit: false,
             allow_close: false,
             env_edit: HashMap::new(),
+            revealed: HashSet::new(),
+            key_check: Arc::default(),
             free_models: Arc::default(),
             notice: None,
             last_tick: Instant::now(),
@@ -372,37 +380,40 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("local-llm").size(18.0).strong());
+            ui.label(RichText::new("local-llm").size(17.0).strong().color(theme::text()));
             if ui.link(RichText::new(format!("v{}", setup::VERSION)).small()).on_hover_text("GUI version - open the releases").clicked() {
                 crate::sys::open_url(setup::RELEASES_URL);
             }
             if ui::tool(ui, icons::GITHUB, "local-llm on GitHub").clicked() {
                 crate::sys::open_url(setup::REPO_WEB);
             }
-            ui.separator();
+            ui.add_space(4.0);
             for server in [Server::Ollama, Server::Comfy] {
                 let up = self.servers.up(server);
-                ui::dot(ui, if up { GREEN } else { Color32::GRAY });
-                ui.label(server.name()).on_hover_text(if up {
-                    "running"
-                } else {
-                    "not running - started automatically when a flow needs it"
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 5.0;
+                    ui::dot(ui, if up { green() } else { theme::faint() });
+                    ui.label(RichText::new(server.name()).color(if up { theme::text() } else { theme::muted() })).on_hover_text(if up {
+                        "running"
+                    } else {
+                        "not running - started automatically when a flow needs it"
+                    });
+                    if up {
+                        if server == Server::Comfy && ui::tool(ui, icons::OPEN_IN_NEW, "open ComfyUI in the browser").clicked() {
+                            crate::sys::open_url("http://127.0.0.1:8188");
+                        }
+                    } else if servers::starting(server) {
+                        ui.spinner().on_hover_text(format!("{} is starting ...", server.name()));
+                    } else if let Some(r) = &self.repo
+                        && ui::tool(ui, icons::POWER, &format!("start {}", server.name())).clicked()
+                    {
+                        let root = r.paths.root.clone();
+                        if let Err(e) = servers::start(server, &root) {
+                            self.notify(e, true);
+                        }
+                    }
                 });
-                if up {
-                    if server == Server::Comfy && ui::tool(ui, icons::OPEN_IN_NEW, "open ComfyUI in the browser").clicked() {
-                        crate::sys::open_url("http://127.0.0.1:8188");
-                    }
-                } else if servers::starting(server) {
-                    ui.spinner().on_hover_text(format!("{} is starting ...", server.name()));
-                } else if let Some(r) = &self.repo
-                    && ui::tool(ui, icons::POWER, &format!("start {}", server.name())).clicked()
-                {
-                    let root = r.paths.root.clone();
-                    if let Err(e) = servers::start(server, &root) {
-                        self.notify(e, true);
-                    }
-                }
-                ui.add_space(6.0);
+                ui.add_space(4.0);
             }
             ui.separator();
             let llm = self.llm();
@@ -420,11 +431,9 @@ impl App {
             };
             let weak = ui.visuals().weak_text_color();
             ui::icon(ui, icon, weak);
-            if ui.link(text).on_hover_text("vision LLM - change in Settings").clicked() {
-                self.select(Page::Settings);
+            if ui.link(text).on_hover_text("writer for the flows - change on the Coding page or in Settings").clicked() {
+                self.select(Page::Coding);
             }
-            ui.separator();
-            self.profile_toggle(ui);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // one compact indicator for the whole queue; details on the Queue page
@@ -446,7 +455,8 @@ impl App {
                     );
                     drop(j);
                     // a progress bar only senses hover by itself
-                    let bar = ui::progress(ui, frac, 300.0, &text, ui::ACCENT).interact(egui::Sense::click());
+                    let width = ui.available_width().min(300.0);
+                    let bar = ui::progress(ui, frac, width, &text, ui::accent()).interact(egui::Sense::click());
                     let bar = bar.on_hover_cursor(egui::CursorIcon::PointingHand);
                     if bar.on_hover_text("open the queue").clicked() {
                         self.select(Page::Queue);
@@ -466,15 +476,22 @@ impl App {
     }
 
     fn nav(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(6.0);
         let mut clicked = None;
         let text = ui.visuals().text_color();
         let nav_item = |ui: &mut egui::Ui, selected: bool, icon: icons::Icon, label: &str| -> bool {
-            let b = egui::Button::image_and_text(icon.image(18.0, text), label)
+            let color = if selected { theme::text() } else { text };
+            let icon_color = if selected { ui::accent() } else { theme::muted() };
+            let b = egui::Button::image_and_text(icon.image(18.0, icon_color), RichText::new(label).color(color))
                 .selected(selected)
                 .frame_when_inactive(false)
-                .min_size(egui::vec2(ui.available_width(), 28.0));
+                .corner_radius(8)
+                .min_size(egui::vec2(ui.available_width(), 34.0));
             ui.add(b).clicked()
+        };
+        let section = |ui: &mut egui::Ui, title: &str| {
+            ui.add_space(10.0);
+            ui.label(RichText::new(title).size(10.5).color(theme::faint()).strong());
+            ui.add_space(2.0);
         };
         if nav_item(ui, self.cfg.page == Page::Home, icons::HOME, "Start") {
             clicked = Some(Page::Home);
@@ -489,35 +506,70 @@ impl App {
         if nav_item(ui, self.cfg.page == Page::Queue, icons::PLAYLIST_PLAY, &queue) {
             clicked = Some(Page::Queue);
         }
-        ui.add_space(4.0);
-        ui.label(RichText::new("CREATE").small().weak());
-        for id in FlowId::ALL {
-            let title = self.cfg.forms.get(id).title();
-            let running = self.running == Some(id);
-            let queued = self.queue.iter().any(|(q, _)| *q == id);
-            let label = if running {
-                format!("{title}  ▶")
-            } else if queued {
-                format!("{title}  ⏳")
-            } else if !self.ready(id) {
-                format!("{title}  ⚠")
-            } else {
-                title.to_owned()
-            };
-            if nav_item(ui, self.cfg.page == Page::Flow(id), id.icon(), &label) {
-                clicked = Some(Page::Flow(id));
-            }
-        }
-        ui.add_space(4.0);
-        ui.label(RichText::new("MANAGE").small().weak());
-        for (page, icon, label) in [(Page::Coding, icons::ROBOT, "Coding"), (Page::Models, icons::DATABASE, "Models"), (Page::Settings, icons::COG, "Settings")] {
-            if nav_item(ui, self.cfg.page == page, icon, label) {
-                clicked = Some(page);
-            }
-        }
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            self.nav_footer(ui);
+            // the links scroll, the footer stays pinned to the bottom of the sidebar
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    section(ui, "CREATE");
+                    for id in FlowId::ALL {
+                        let title = self.cfg.forms.get(id).title();
+                        let running = self.running == Some(id);
+                        let queued = self.queue.iter().any(|(q, _)| *q == id);
+                        let label = if running {
+                            format!("{title}  ▶")
+                        } else if queued {
+                            format!("{title}  ⏳")
+                        } else if !self.ready(id) {
+                            format!("{title}  ⚠")
+                        } else {
+                            title.to_owned()
+                        };
+                        if nav_item(ui, self.cfg.page == Page::Flow(id), id.icon(), &label) {
+                            clicked = Some(Page::Flow(id));
+                        }
+                    }
+                    section(ui, "MANAGE");
+                    for (page, icon, label) in [(Page::Coding, icons::ROBOT, "Coding"), (Page::Models, icons::DATABASE, "Models"), (Page::Settings, icons::COG, "Settings")] {
+                        if nav_item(ui, self.cfg.page == page, icon, label) {
+                            clicked = Some(page);
+                        }
+                    }
+                });
+            });
+        });
         if let Some(p) = clicked {
             self.select(p);
         }
+    }
+
+    /// Bottom of the sidebar: what the local model is doing, and how it is tuned.
+    fn nav_footer(&mut self, ui: &mut egui::Ui) {
+        let (url, model, _) = self.llama_config();
+        let status = self.coding.lock().unwrap().llama.status.clone();
+        let (color, text) = match status {
+            Some(Ok(r)) if r.loaded(&model) => (green(), format!("{} ready", crate::llamacpp::display_name(&model))),
+            Some(Ok(r)) if r.loading(&model) => (amber(), format!("loading {} ...", crate::llamacpp::display_name(&model))),
+            Some(Ok(r)) if r.running => (amber(), "router running, no model".into()),
+            Some(Ok(_)) => (theme::faint(), "router not running".into()),
+            Some(Err(_)) => (red(), "router not answering".into()),
+            None => (theme::faint(), format!("asking {url} ...")),
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui::dot(ui, color);
+            ui.label(RichText::new(text).small().color(theme::muted()));
+        })
+        .response
+        .on_hover_text(self.llama_tip());
+        let profile = self.profile();
+        let tuned = format!("Tuned for {} · {}k context", profile.label(), self.llama_ctx() / 1024);
+        if ui.link(RichText::new(tuned).small()).on_hover_text("change on the Coding page").clicked() {
+            self.select(Page::Coding);
+        }
+        ui.add_space(6.0);
+        ui.separator();
     }
 
     /// Asked once when the window is closed while a flow is running or queued.
@@ -530,7 +582,7 @@ impl App {
             ui.label("A flow is still running - quitting stops it and loses its progress.");
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, RED), RichText::new("Quit anyway").color(RED))).clicked() {
+                if ui.add(egui::Button::image_and_text(icons::STOP.image(16.0, red()), RichText::new("Quit anyway").color(red()))).clicked() {
                     quit = true;
                 }
                 if ui.button("Keep running").clicked() {
@@ -550,16 +602,38 @@ impl App {
         }
     }
 
-    fn notice_ui(&mut self, ui: &mut egui::Ui) {
-        if let Some((text, error, at)) = &self.notice {
-            if at.elapsed() > Duration::from_secs(8) {
-                self.notice = None;
-                return;
-            }
-            ui.ctx().request_repaint_after(Duration::from_secs(1));
-            let (icon, color) = if *error { (icons::ALERT_CIRCLE, RED) } else { (icons::CHECK_CIRCLE, GREEN) };
-            ui::status(ui, icon, color, text.as_str());
+    fn notice_ui(&mut self, ctx: &egui::Context) {
+        let Some((text, error, at)) = &self.notice else { return };
+        if at.elapsed() > Duration::from_secs(8) {
+            self.notice = None;
+            return;
         }
+        ctx.request_repaint_after(Duration::from_millis(250));
+        let (icon, color) = if *error { (icons::ALERT_CIRCLE, red()) } else { (icons::CHECK_CIRCLE, green()) };
+        egui::Area::new(egui::Id::new("notice"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -18.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let shadow = egui::epaint::Shadow {
+                    offset: [0, 4],
+                    blur: 14,
+                    spread: 0,
+                    color: Color32::from_black_alpha(90),
+                };
+                egui::Frame::new()
+                    .fill(theme::surface_high())
+                    .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.6)))
+                    .corner_radius(theme::RADIUS)
+                    .inner_margin(12)
+                    .shadow(shadow)
+                    .show(ui, |ui| {
+                        ui.set_max_width(520.0);
+                        ui.horizontal(|ui| {
+                            ui::icon(ui, icon, color);
+                            ui.label(text.as_str());
+                        });
+                    });
+            });
     }
 }
 
@@ -576,16 +650,16 @@ pub fn or_default(value: &str, default: &str) -> String {
 
 pub fn status_text(s: &Status) -> (icons::Icon, String, Color32) {
     match s {
-        Status::Present(_) => (icons::CHECK_CIRCLE, "on disk".into(), GREEN),
-        Status::SizeDiffers { size, .. } => (icons::ALERT, format!("on disk, {} (size differs)", crate::sys::human(*size)), AMBER),
+        Status::Present(_) => (icons::CHECK_CIRCLE, "on disk".into(), green()),
+        Status::SizeDiffers { size, .. } => (icons::ALERT, format!("on disk, {} (size differs)", crate::sys::human(*size)), amber()),
         Status::Linkable(p) => (
             icons::LINK_VARIANT,
             format!("same file found ({}) - linked, no download", p.file_name().unwrap_or_default().to_string_lossy()),
-            AMBER,
+            amber(),
         ),
-        Status::Missing { partial: 0 } => (icons::CIRCLE_OUTLINE, "not downloaded".into(), RED),
-        Status::Missing { partial } => (icons::CIRCLE_OUTLINE, format!("partly downloaded ({})", crate::sys::human(*partial)), RED),
-        Status::Manual => (icons::ALERT_CIRCLE, "no public download - copy it in by hand".into(), RED),
+        Status::Missing { partial: 0 } => (icons::CIRCLE_OUTLINE, "not downloaded".into(), red()),
+        Status::Missing { partial } => (icons::CIRCLE_OUTLINE, format!("partly downloaded ({})", crate::sys::human(*partial)), red()),
+        Status::Manual => (icons::ALERT_CIRCLE, "no public download - copy it in by hand".into(), red()),
         Status::Unknown => (icons::TIMER_SAND, "checking...".into(), Color32::GRAY),
     }
 }
@@ -619,14 +693,15 @@ impl eframe::App for App {
             return;
         }
 
-        egui::Panel::top("top").show(ui, |ui| {
-            ui.add_space(4.0);
-            self.top_bar(ui);
-            ui.add_space(2.0);
-        });
-        egui::Panel::left("nav").resizable(false).exact_size(210.0).show(ui, |ui| self.nav(ui));
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.notice_ui(ui);
+        let top = egui::Frame::new()
+            .fill(theme::chrome())
+            .inner_margin(egui::Margin::symmetric(16, 7))
+            .stroke(egui::Stroke::new(1.0, theme::border()));
+        egui::Panel::top("top").frame(top).show(ui, |ui| self.top_bar(ui));
+        let side = egui::Frame::new().fill(theme::chrome()).inner_margin(egui::Margin::symmetric(10, 12));
+        egui::Panel::left("nav").resizable(false).exact_size(230.0).frame(side).show(ui, |ui| self.nav(ui));
+        let page = egui::Frame::new().fill(theme::bg()).inner_margin(egui::Margin::symmetric(22, 16));
+        egui::CentralPanel::default().frame(page).show(ui, |ui| {
             match self.cfg.page {
                 Page::Home => self.home_page(ui),
                 Page::Flow(id) => self.flow_page(ui, id),
@@ -636,6 +711,10 @@ impl eframe::App for App {
                 Page::Settings => self.settings_page(ui),
             }
         });
+        {
+            let ctx = ui.ctx().clone();
+            self.notice_ui(&ctx);
+        }
         if let Some(id) = self.prompt {
             let ctx = ui.ctx().clone();
             self.setup_dialog(&ctx, id);

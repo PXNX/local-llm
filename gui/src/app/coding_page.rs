@@ -11,7 +11,8 @@ use crate::icons;
 use crate::llamacpp::{self, Router};
 use crate::models::{Dl, Task, ollama_id};
 use crate::sys;
-use crate::ui::{self, AMBER, GREEN, RED};
+use crate::theme;
+use crate::ui::{self, amber, green, red};
 
 /// What the Coding page knows about Ollama, filled in by background threads.
 #[derive(Default)]
@@ -108,7 +109,7 @@ impl App {
                 let color = if on { egui::Color32::WHITE } else { ui.visuals().text_color() };
                 let (left, right) = (if i == 0 { 6 } else { 0 }, if i == last { 6 } else { 0 });
                 let b = egui::Button::image_and_text(icon.image(15.0, color), RichText::new(p.label()).color(color))
-                    .fill(if on { ui::ACCENT } else { ui.visuals().widgets.inactive.weak_bg_fill })
+                    .fill(if on { ui::accent() } else { ui.visuals().widgets.inactive.weak_bg_fill })
                     .corner_radius(egui::CornerRadius { nw: left, sw: left, ne: right, se: right });
                 let tip = format!("local LLM tuned for {}: {}", p.label().to_lowercase(), p.summary());
                 if ui.add(b).on_hover_text(tip).clicked() {
@@ -127,15 +128,12 @@ impl App {
         }
         self.poll_llama_router();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.heading("Coding");
-            ui.label(
-                RichText::new(
-                    "A local model for T3 Code, OpenCode and Pi, built from the models you already have - nothing is downloaded. \
-                     The flows use the writer you pick below.",
-                )
-                .weak(),
+            ui::page_header(
+                ui,
+                icons::ROBOT,
+                "Coding",
+                "A local model for T3 Code, OpenCode and Pi, built from the models you already have - nothing is downloaded. The flows use the writer you pick below.",
             );
-            ui.add_space(10.0);
             ui::card(ui, |ui| self.profile_card(ui));
             ui.add_space(8.0);
             ui::card(ui, |ui| self.llama_cpp_card(ui));
@@ -191,7 +189,7 @@ impl App {
             ui::status(
                 ui,
                 icons::ALERT,
-                AMBER,
+                amber(),
                 format!("the running router uses {} - Stop router, then Start router to apply {}", llamacpp::context_label(started.unwrap_or(llamacpp::CONTEXT)), llamacpp::context_label(pick)),
             );
         }
@@ -272,27 +270,28 @@ impl App {
         };
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new("llama.cpp router").strong());
+            ui.add(icons::DESKTOP_TOWER.image(18.0, ui::accent()));
+            ui.label(RichText::new("llama.cpp router").size(15.5).color(theme::text()));
             match &status {
                 None => {
                     ui.spinner();
                     ui.label(RichText::new(format!("asking {url} ...")).weak());
                 }
                 Some(Err(e)) => {
-                    ui::status(ui, icons::ALERT_CIRCLE, RED, e.as_str());
+                    ui::status(ui, icons::ALERT_CIRCLE, red(), e.as_str());
                 }
                 Some(Ok(_)) if loaded => {
-                    ui::status(ui, icons::CHECK_CIRCLE, GREEN, format!("{} loaded", llamacpp::display_name(&model)));
+                    ui::status(ui, icons::CHECK_CIRCLE, green(), format!("{} loaded", llamacpp::display_name(&model)));
                 }
                 Some(Ok(_)) if loading => {
-                    ui::status(ui, icons::TIMER_SAND, AMBER, "loading the model ...");
+                    ui::status(ui, icons::TIMER_SAND, amber(), "loading the model ...");
                 }
                 Some(Ok(_)) if failed.is_some() => {
                     let code = failed.unwrap_or_default();
-                    ui::status(ui, icons::ALERT_CIRCLE, RED, format!("model failed to load (exit code {code})"));
+                    ui::status(ui, icons::ALERT_CIRCLE, red(), format!("model failed to load (exit code {code})"));
                 }
                 Some(Ok(r)) if r.running => {
-                    ui::status(ui, icons::CIRCLE_OUTLINE, AMBER, "router running, model not loaded");
+                    ui::status(ui, icons::CIRCLE_OUTLINE, amber(), "router running, model not loaded");
                 }
                 Some(Ok(_)) => {
                     ui::status(ui, icons::CIRCLE_OUTLINE, Color32::GRAY, "router not running");
@@ -401,10 +400,10 @@ impl App {
         if let Some(result) = &last {
             match result {
                 Ok(m) => {
-                    ui::status(ui, icons::CHECK_CIRCLE, GREEN, m.as_str());
+                    ui::status(ui, icons::CHECK_CIRCLE, green(), m.as_str());
                 }
                 Err(e) => {
-                    ui::status(ui, icons::ALERT_CIRCLE, RED, e.as_str());
+                    ui::status(ui, icons::ALERT_CIRCLE, red(), e.as_str());
                 }
             }
         }
@@ -535,7 +534,7 @@ impl App {
     }
 
     fn profile_card(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Tuned for").strong());
+        ui::card_title(ui, icons::ROCKET_LAUNCH, "Tuned for", None);
         self.profile_toggle(ui);
         ui.add_space(4.0);
         let p = self.profile();
@@ -563,12 +562,15 @@ impl App {
     }
 
     fn models_card(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Models").strong());
-            if ui::tool(ui, icons::REFRESH, "list Ollama's models again").clicked() {
-                self.list_ollama_models();
-            }
+        let mut refresh = false;
+        ui::card_title_with(ui, icons::DATABASE, "Models", |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                refresh = ui::tool(ui, icons::REFRESH, "list Ollama's models again").clicked();
+            });
         });
+        if refresh {
+            self.list_ollama_models();
+        }
         let (installed, busy, last) = {
             let s = self.coding.lock().unwrap();
             (s.installed.clone(), s.busy, s.last.clone())
@@ -598,11 +600,11 @@ impl App {
                 let have_base = installed.contains(&base);
                 let built = installed.iter().any(|m| m == p.variant());
                 if !have_base {
-                    ui::status(ui, icons::ALERT, AMBER, "not downloaded");
+                    ui::status(ui, icons::ALERT, amber(), "not downloaded");
                 } else if built {
-                    ui::status(ui, icons::CHECK_CIRCLE, GREEN, "set up");
+                    ui::status(ui, icons::CHECK_CIRCLE, green(), "set up");
                 } else {
-                    ui::status(ui, icons::CIRCLE_OUTLINE, AMBER, "not set up yet");
+                    ui::status(ui, icons::CIRCLE_OUTLINE, amber(), "not set up yet");
                 }
                 if busy == Some(p) {
                     ui.spinner();
@@ -632,11 +634,11 @@ impl App {
                             ui.label(RichText::new(sys::human(size)).weak().small());
                         }
                         if models.status(&id).usable() {
-                            ui::status(ui, icons::CHECK_CIRCLE, GREEN, "downloaded");
+                            ui::status(ui, icons::CHECK_CIRCLE, green(), "downloaded");
                         } else if let Some(dl) = models.download(&id) {
                             match dl {
                                 Dl::Failed(e) => {
-                                    ui::status(ui, icons::ALERT_CIRCLE, RED, &e);
+                                    ui::status(ui, icons::ALERT_CIRCLE, red(), &e);
                                 }
                                 _ => {
                                     ui.spinner();
@@ -658,10 +660,10 @@ impl App {
         }
         match &last {
             Some(Ok(m)) => {
-                ui::status(ui, icons::CHECK_CIRCLE, GREEN, m.as_str());
+                ui::status(ui, icons::CHECK_CIRCLE, green(), m.as_str());
             }
             Some(Err(e)) => {
-                ui::status(ui, icons::ALERT_CIRCLE, RED, e.as_str());
+                ui::status(ui, icons::ALERT_CIRCLE, red(), e.as_str());
             }
             None => {}
         }
@@ -674,7 +676,7 @@ impl App {
         let p = self.profile();
         let root = self.repo.as_ref().map(|r| r.paths.root.clone());
         let ready = self.coding.lock().unwrap().installed.as_ref().is_some_and(|i| i.iter().any(|m| m == p.variant()));
-        ui.label(RichText::new("Open").strong());
+        ui::card_title(ui, icons::OPEN_IN_NEW, "Open", None);
         ui.horizontal(|ui| {
             for e in Editor::ALL {
                 let installed = e.exe().is_some();
@@ -702,13 +704,16 @@ impl App {
     }
 
     fn console_card(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Console").strong());
-            ui.label(RichText::new("llama.cpp, Ollama and the commands the GUI starts").small().weak());
-            if ui::tool(ui, icons::DELETE_OUTLINE, "clear the console").clicked() {
-                crate::console::clear(&self.console);
-            }
+        let mut clear = false;
+        ui::card_title_with(ui, icons::TEXT_BOX_EDIT, "Console", |ui| {
+            ui.label(RichText::new("llama.cpp, Ollama and the commands the GUI starts").small().color(theme::muted()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                clear = ui::tool(ui, icons::DELETE_OUTLINE, "clear the console").clicked();
+            });
         });
+        if clear {
+            crate::console::clear(&self.console);
+        }
         let c = self.console.lock().unwrap();
         if c.lines.is_empty() {
             ui.label(RichText::new("Command lines and output appear here.").weak());

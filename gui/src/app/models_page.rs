@@ -10,14 +10,17 @@ use crate::models::{Dl, Models, Share, Status, Task, ollama_id};
 use crate::paths;
 use crate::servers::{self, Server};
 use crate::sys;
-use crate::ui::{self, AMBER, GREEN, RED};
+use crate::ui::{self, amber, green, red};
 
 impl App {
     pub(super) fn models_page(&mut self, ui: &mut egui::Ui) {
         let Some(models) = self.repo.as_ref().map(|r| r.models.clone()) else { return };
-        ui.heading("Models");
-        ui.label(RichText::new("Every model file in one place. Nothing is downloaded or stored twice: finished files are marked, files that already exist under another name - or as an Ollama model with the same bytes - are hard-linked instead of copied.").weak());
-        ui.add_space(6.0);
+        ui::page_header(
+            ui,
+            icons::DATABASE,
+            "Models",
+            "Every model file in one place. Nothing is downloaded or stored twice: finished files are marked, files that already exist under another name - or as an Ollama model with the same bytes - are hard-linked instead of copied.",
+        );
 
         let dir = self.models_dir();
         ui::card(ui, |ui| {
@@ -158,13 +161,13 @@ impl App {
             ui::card(ui, |ui| {
                 if mv.finished {
                     let (icon, color, text) = if mv.errors.is_empty() {
-                        (icons::CHECK_CIRCLE, GREEN, "Models moved.".to_owned())
+                        (icons::CHECK_CIRCLE, green(), "Models moved.".to_owned())
                     } else {
-                        (icons::ALERT, AMBER, format!("Moved, {} file(s) could not be moved:", mv.errors.len()))
+                        (icons::ALERT, amber(), format!("Moved, {} file(s) could not be moved:", mv.errors.len()))
                     };
                     ui::status(ui, icon, color, text);
                     for e in &mv.errors {
-                        ui.label(RichText::new(e).small().color(RED));
+                        ui.label(RichText::new(e).small().color(red()));
                     }
                     if ui::button(ui, icons::CLOSE, "OK").clicked() {
                         models.clear_move();
@@ -177,7 +180,7 @@ impl App {
                 } else {
                     let frac = mv.done as f32 / mv.total.max(1) as f32;
                     let text = format!("moving {} · {} / {}", mv.file, sys::human(mv.done), sys::human(mv.total));
-                    ui::progress(ui, Some(frac), ui.available_width(), &text, ui::ACCENT);
+                    ui::progress(ui, Some(frac), ui.available_width(), &text, ui::accent());
                     ui.ctx().request_repaint_after(Duration::from_millis(250));
                 }
             });
@@ -199,7 +202,7 @@ impl App {
         let moves_ollama = plan.iter().any(|m| m.to.starts_with(&ollama_dir));
         ui::card(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui::icon(ui, icons::FOLDER_MOVE, AMBER);
+                ui::icon(ui, icons::FOLDER_MOVE, amber());
                 let from: Vec<String> = labels.iter().map(|(l, b)| format!("{l} {}", sys::human(*b))).collect();
                 ui.label(format!(
                     "{} file(s) ({}) are still outside the models folder: {}.",
@@ -210,7 +213,7 @@ impl App {
                 .on_hover_text("Hugging Face and torch: only their model caches move (other programs download again if they need them)");
                 let running = (moves_ollama && self.servers.up(Server::Ollama)) || self.servers.up(Server::Comfy);
                 if running {
-                    ui.label(RichText::new("Stop ComfyUI and Ollama first:").color(AMBER));
+                    ui.label(RichText::new("Stop ComfyUI and Ollama first:").color(amber()));
                     if self.servers.up(Server::Ollama) && ui::button(ui, icons::POWER, "Stop Ollama").clicked() {
                         servers::stop_ollama();
                     }
@@ -251,13 +254,13 @@ fn row_status(ui: &mut egui::Ui, models: &Models, id: &str, note: &str) {
                 None => format!("{verb} {}", sys::human(done)),
             };
             let frac = total.map(|t| done as f32 / t.max(1) as f32);
-            ui::progress(ui, frac, 320.0, &text, ui::ACCENT);
+            ui::progress(ui, frac, 320.0, &text, ui::accent());
             if ui::tool(ui, icons::CLOSE, "cancel (resumes later)").clicked() {
                 models.cancel(id);
             }
         }
         Some(Dl::Failed(e)) => {
-            ui::status(ui, icons::ALERT_CIRCLE, RED, "failed").on_hover_text(e.as_str());
+            ui::status(ui, icons::ALERT_CIRCLE, red(), "failed").on_hover_text(e.as_str());
             ui.horizontal(|ui| {
                 if ui::button(ui, icons::REFRESH, "Retry").clicked() {
                     models.dismiss(id);
@@ -266,7 +269,7 @@ fn row_status(ui: &mut egui::Ui, models: &Models, id: &str, note: &str) {
                 if ui::tool(ui, icons::CLOSE, "dismiss").clicked() {
                     models.dismiss(id);
                 }
-                ui.label(RichText::new(e).small().color(RED));
+                ui.label(RichText::new(e).small().color(red()));
             });
         }
         None => {
@@ -276,10 +279,10 @@ fn row_status(ui: &mut egui::Ui, models: &Models, id: &str, note: &str) {
                 ui::status(ui, icon, color, text);
                 match models.share(id) {
                     Some(Share::Shared(with)) => {
-                        ui::icon(ui, icons::LINK, GREEN).on_hover_text(format!("one copy on disk, shared with {with}"));
+                        ui::icon(ui, icons::LINK, green()).on_hover_text(format!("one copy on disk, shared with {with}"));
                     }
                     Some(Share::Duplicate { with, .. }) => {
-                        ui::icon(ui, icons::CONTENT_COPY, AMBER)
+                        ui::icon(ui, icons::CONTENT_COPY, amber())
                             .on_hover_text(format!("the same bytes are stored a second time by {with}"));
                     }
                     None => {}
@@ -317,7 +320,7 @@ fn row_status(ui: &mut egui::Ui, models: &Models, id: &str, note: &str) {
                     }
                 }
                 Status::Manual => {
-                    ui.label(RichText::new(note).small().color(AMBER));
+                    ui.label(RichText::new(note).small().color(amber()));
                 }
                 Status::Unknown => {}
             });

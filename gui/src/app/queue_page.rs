@@ -9,22 +9,19 @@ use crate::flows::FlowId;
 use crate::highlight;
 use crate::icons;
 use crate::jobs::JobHandle;
-use crate::ui::{self, AMBER};
+use crate::ui::{self, amber};
 
 impl App {
     /// Queue page: the running run, the waiting ones and what ran this session.
     pub(super) fn queue_page(&mut self, ui: &mut egui::Ui) {
         let mut open = None;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.heading("Queue");
-            ui.label(
-                RichText::new(
-                    "One flow runs at a time so it gets the whole GPU. Everything else waits here and starts automatically, top to bottom. \
-                     Each waiting run keeps the settings it was added with.",
-                )
-                .weak(),
+            ui::page_header(
+                ui,
+                icons::PLAYLIST_PLAY,
+                "Queue",
+                "One flow runs at a time so it gets the whole GPU. Everything else waits here and starts automatically, top to bottom. Each waiting run keeps the settings it was added with.",
             );
-            ui.add_space(10.0);
             self.running_card(ui, &mut open);
             ui.add_space(8.0);
             self.waiting_card(ui, &mut open);
@@ -38,7 +35,7 @@ impl App {
 
     fn running_card(&mut self, ui: &mut egui::Ui, open: &mut Option<FlowId>) {
         ui::card(ui, |ui| {
-            ui.label(RichText::new("Running now").strong());
+            ui::card_title(ui, icons::PLAY, "Running now", None);
             let Some((id, h)) = self.running_job().map(|(id, h)| (id, h.clone())) else {
                 ui.label(RichText::new("Nothing is running.").weak());
                 return;
@@ -87,7 +84,7 @@ impl App {
 
     fn waiting_card(&mut self, ui: &mut egui::Ui, open: &mut Option<FlowId>) {
         ui::card(ui, |ui| {
-            ui.label(RichText::new(format!("Waiting ({})", self.queue.len())).strong());
+            ui::card_title(ui, icons::TIMER_SAND, &format!("Waiting ({})", self.queue.len()), None);
             if self.queue.is_empty() {
                 ui.label(RichText::new("Press Add to queue on any flow - also the running one - to line up more runs here.").weak());
                 return;
@@ -99,7 +96,7 @@ impl App {
                         self.held = false;
                     }
                     let when = if self.running.is_some() { "after the current run" } else { "until you press Start" };
-                    ui::status(ui, icons::PAUSE, AMBER, format!("On hold - nothing more starts {when}"));
+                    ui::status(ui, icons::PAUSE, amber(), format!("On hold - nothing more starts {when}"));
                 } else if self.running.is_some() {
                     let tip = "the current run finishes; the waiting ones stay until you press Start";
                     if ui::button(ui, icons::PAUSE, "Hold after this run").on_hover_text(tip).clicked() {
@@ -140,7 +137,7 @@ impl App {
                 self.queue.remove(i);
             }
             ui.add_space(4.0);
-            if ui.add(egui::Button::image_and_text(icons::DELETE_OUTLINE.image(16.0, AMBER), "Clear the queue")).clicked() {
+            if ui.add(egui::Button::image_and_text(icons::DELETE_OUTLINE.image(16.0, amber()), "Clear the queue")).clicked() {
                 self.queue.clear();
             }
         });
@@ -149,10 +146,7 @@ impl App {
     fn finished_card(&mut self, ui: &mut egui::Ui, open: &mut Option<FlowId>) {
         let done: Vec<_> = self.recent.iter().filter(|(_, h)| !h.job.lock().unwrap().running()).cloned().collect();
         ui::card(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.add(icons::HISTORY.image(16.0, ui.visuals().text_color()));
-                ui.label(RichText::new("Finished").strong());
-            });
+            ui::card_title(ui, icons::HISTORY, "Finished", None);
             if done.is_empty() {
                 ui.label(RichText::new("Runs that ended since the app was started show up here.").weak());
                 return;
@@ -183,7 +177,7 @@ impl App {
         let mut go = false;
         ui::card(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.add(icons::PLAYLIST_PLAY.image(20.0, ui::ACCENT));
+                ui.add(icons::PLAYLIST_PLAY.image(20.0, ui::accent()));
                 if let Some((id, h)) = self.running_job() {
                     let title = h.job.lock().unwrap().title.clone();
                     ui.label(RichText::new(format!("Running: {title}")).strong());

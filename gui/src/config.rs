@@ -39,6 +39,8 @@ pub struct Config {
     pub step_times: HashMap<FlowId, HashMap<String, f32>>,
     /// A sound when a queued run ends and another when the queue is through.
     pub sounds: bool,
+    /// Dark palette (default) or light. Changed in Settings > Appearance.
+    pub dark: bool,
     /// Named form settings per flow, saved and loaded on the flow's page.
     pub presets: HashMap<FlowId, BTreeMap<String, serde_json::Value>>,
 }
@@ -55,6 +57,7 @@ impl Default for Config {
             forms: Forms::default(),
             step_times: HashMap::new(),
             sounds: true,
+            dark: true,
             presets: HashMap::new(),
         }
     }
