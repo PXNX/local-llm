@@ -5,7 +5,7 @@ Ollama model.
 Configured in the repo's .env (real environment variables win):
   LLM_PROVIDER        openrouter (default when OPENROUTER_API_KEY is set), opencode, llamacpp or ollama
   OPENROUTER_API_KEY  https://openrouter.ai/keys
-  OPENROUTER_MODEL    a vision-capable model, default qwen/qwen3.8-27b:free
+  OPENROUTER_MODEL    a vision-capable model, default nvidia/nemotron-3.5-super-vl:free
   OPENROUTER_FALLBACKS up to 3 more models (comma separated), tried in order when one fails
   LLM_LOCAL_FALLBACK  1 (default): use the local Ollama model when all OpenRouter models fail
   OPENCODE_MODEL      Zen model for LLM_PROVIDER=opencode, default opencode/deepseek-v4.1-flash-free
@@ -37,7 +37,7 @@ REPO = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO / ".env"
 OLLAMA_URL = "http://127.0.0.1:11434"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_OPENROUTER_MODEL = "qwen/qwen3.8-27b:free"
+DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3.5-super-vl:free"
 DEFAULT_OLLAMA_MODEL = "qwen3-vl:4b"
 DEFAULT_OPENCODE_MODEL = "opencode/deepseek-v4.1-flash-free"
 DEFAULT_LLAMACPP_URL = "http://127.0.0.1:8080"
@@ -45,7 +45,7 @@ DEFAULT_LLAMACPP_MODEL = "nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB:Q4_K_M"
 DEFAULT_WRAP_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_OLLAMA_TEXT_MODEL = "qwen3:8b"
 DEFAULT_QUALITY_TEXT_MODEL = "qwen3.8-blend:27b"
-DEFAULT_FALLBACKS = "google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+DEFAULT_FALLBACKS = "dots-studio/dots-3-note-preview:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
 MAX_FALLBACKS = 3
 
 
@@ -265,13 +265,17 @@ def _ask(prompt, b64, temperature, keep_alive, ollama_options):
             for name in openrouter_models():
                 try:
                     return _openrouter(name, prompt, b64, temperature)
-                except Exception as e:  # rate limit, model gone, bad JSON ... -> next model
+                except ModelGone as e:
+                    # a dead model id: retrying it cannot help, the next fallback can
+                    errors.append(f"{name}: {e}")
+                    print(f"[llm  ] WARNING: {name} - {_short(e)}")
+                except Exception as e:  # rate limit, bad JSON ... -> next model
                     errors.append(f"{name}: {e}")
                     print(f"[llm  ] WARNING: {name} failed ({_short(e)}), trying the next model ...")
         if local_fallback() and _ollama_up():
             print(f"[llm  ] OpenRouter failed, using the local model {ollama_model()}")
             return _ollama(prompt, b64, temperature, keep_alive, ollama_options)
-        raise RuntimeError("all LLM models failed: " + "; ".join(errors or ["OPENROUTER_API_KEY is not set"]))
+        raise RuntimeError("all LLM models failed: " + "; ".join(errors or ["OPENROUTER_API_KEY is not set"]) + _openrouter_hint())
     return _ollama(prompt, b64, temperature, keep_alive, ollama_options)
 
 
@@ -333,6 +337,61 @@ def _llamacpp(prompt, b64, temperature):
     return _parse_json(res["choices"][0]["message"].get("content"))
 
 
+class ModelGone(RuntimeError):
+    """OpenRouter does not serve that model id any more (400 "not a valid model ID", 404 "no longer
+    available" / "no endpoints found that support image input"). Retrying it cannot help."""
+
+
+def _model_gone(code, body):
+    if code not in (400, 404):
+        return False
+    text = body.lower()
+    return any(
+        s in text
+        for s in (
+            "not a valid model",
+            "no longer available",
+            "unavailable for free",
+            "no endpoints found",
+            "does not support image",
+            "does not support input type",
+        )
+    )
+
+
+_CATALOG = None
+
+
+def openrouter_catalog():
+    """id -> model entry from GET /api/v1/models, fetched once per run (None when unreachable).
+
+    Free models come and go every few weeks and OpenRouter answers a dead id with 400 or 404, so the
+    error a flow prints names the ones it still serves instead of leaving the user with a bare "400"."""
+    global _CATALOG
+    if _CATALOG is None:
+        try:
+            with urllib.request.urlopen("https://openrouter.ai/api/v1/models", timeout=20) as r:
+                _CATALOG = {m["id"]: m for m in json.loads(r.read())["data"] if "id" in m}
+        except Exception:
+            return None
+    return _CATALOG
+
+
+def openrouter_free_vision_models(limit=4):
+    """Free model ids that take images - what a caption/rating prompt can use today."""
+    catalog = openrouter_catalog() or {}
+    return [
+        mid
+        for mid, m in catalog.items()
+        if mid.endswith(":free") and "image" in (m.get("architecture", {}).get("input_modalities") or [])
+    ][:limit]
+
+
+def _openrouter_hint():
+    ids = openrouter_free_vision_models()
+    return f" - OpenRouter still serves these free vision models: {', '.join(ids)}" if ids else ""
+
+
 def _openrouter(name, prompt, b64, temperature):
     key = _ENV.get("OPENROUTER_API_KEY")
     content = [{"type": "text", "text": prompt}]
@@ -353,6 +412,10 @@ def _openrouter(name, prompt, b64, temperature):
             if e.code == 400 and "response_format" in payload:
                 payload.pop("response_format")  # model without JSON mode, the prompt asks for JSON anyway
                 continue
+            if _model_gone(e.code, body):
+                raise ModelGone(f"OpenRouter {e.code}: {body}") from None
+            if e.code == 429 and "free-models-per-day" in body:
+                raise RuntimeError(f"OpenRouter 429: {body}") from None  # used up until tomorrow, no retry
             if e.code in (429, 502, 503) and attempt < 2:
                 wait = 3 * 2 ** attempt  # free models are rate limited
                 print(f"[llm  ] OpenRouter {e.code}, retrying in {wait} s ...")

@@ -76,10 +76,10 @@
             "output": 16384
           }
         },
-        "poolside/laguna-s-2.1:free": {
-          "name": "Poolside Laguna S 2.1 (free, OpenRouter)",
+        "nvidia/nemotron-3-ultra-550b-a55b:free": {
+          "name": "Nemotron 3 Ultra 550B (free, OpenRouter, 1M context)",
           "limit": {
-            "context": 262144,
+            "context": 1000000,
             "output": 16384
           }
         }

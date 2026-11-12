@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, RichText};
 
-use super::{App, FreeModels, or_default, setup};
+use super::{App, DEFAULT_OPENROUTER_MODEL, FreeModels, or_default, setup};
 use crate::envfile;
 use crate::flows::Provider;
 use crate::health;
@@ -206,7 +206,7 @@ impl App {
                     ui,
                     "OPENROUTER_FALLBACKS",
                     "Fallback models",
-                    "google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+                    "dots-studio/dots-3-note-preview:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
                     "up to 3 more models, comma separated - tried in order when the first fails or is rate limited",
                 );
                 self.text_field(
@@ -332,19 +332,23 @@ impl App {
 
     fn openrouter_model_row(&mut self, ui: &mut egui::Ui) {
         let Some(r) = &self.repo else { return };
-        let current = or_default(&r.env.get("OPENROUTER_MODEL"), "qwen/qwen3.8-27b:free");
+        let current = or_default(&r.env.get("OPENROUTER_MODEL"), DEFAULT_OPENROUTER_MODEL);
         ui.label("Model").on_hover_text("OPENROUTER_MODEL in .env");
         ui.horizontal(|ui| {
             let value = self.env_edit.entry("OPENROUTER_MODEL").or_insert(current);
-            ui.add(egui::TextEdit::singleline(value).desired_width(300.0).hint_text("qwen/qwen3.8-27b:free"));
+            ui.add(egui::TextEdit::singleline(value).desired_width(300.0).hint_text(DEFAULT_OPENROUTER_MODEL));
             let state = &mut *self.free_models.lock().unwrap();
             match state {
-                FreeModels::Loaded(list) => {
+                FreeModels::Loaded { free, current_ok } => {
+                    let stale = !*current_ok;
                     egui::ComboBox::from_id_salt("free").selected_text("pick a free model").show_ui(ui, |ui| {
-                        for m in list.iter() {
+                        for m in free.iter() {
                             ui.selectable_value(value, m.clone(), m.as_str());
                         }
                     });
+                    if stale {
+                        ui::status(ui, icons::ALERT_CIRCLE, amber(), "not on OpenRouter");
+                    }
                 }
                 FreeModels::Loading => {
                     ui.spinner();
@@ -355,17 +359,26 @@ impl App {
                 FreeModels::NotLoaded => {
                     if ui::button(ui, icons::CLOUD_OUTLINE, "List free vision models").clicked() {
                         *state = FreeModels::Loading;
-                        let (state, ctx) = (self.free_models.clone(), ui.ctx().clone());
-                        fetch_free_models(state, ctx);
+                        let (state, ctx, wanted) = (self.free_models.clone(), ui.ctx().clone(), value.clone());
+                        fetch_free_models(state, wanted, ctx);
                     }
                 }
             }
         });
-        ui.label(
-            RichText::new("only models that take images can caption or rate - the :free ones need no credit")
-                .small()
-                .color(theme::muted()),
-        );
+        let stale = matches!(&*self.free_models.lock().unwrap(), FreeModels::Loaded { current_ok: false, .. });
+        if stale {
+            ui.label(
+                RichText::new("OpenRouter no longer serves this model id and answers it with 400 - pick one from the list")
+                    .small()
+                    .color(amber()),
+            );
+        } else {
+            ui.label(
+                RichText::new("only models that take images can caption or rate - the :free ones need no credit")
+                    .small()
+                    .color(theme::muted()),
+            );
+        }
     }
 
     /// Telegram is a two-value login: everything else (phone, code, 2FA) happens in the flow's login window.
@@ -638,6 +651,18 @@ fn check_openrouter_key(key: String, state: Arc<std::sync::Mutex<KeyCheck>>, ctx
             {
                 text.push_str(&format!(" · ${used:.2} of ${limit:.2} used"));
             }
+            // The free models are limited per day; past the limit every one of them answers 429.
+            if let (Some(used), Some(limit)) = (
+                data["free_model_daily_requests"]["used"].as_u64(),
+                data["free_model_daily_requests"]["limit"].as_u64(),
+            ) && limit > 0
+            {
+                if used >= limit {
+                    text.push_str(&format!(" · free requests used up ({used}/{limit} today) - free models answer 429 until tomorrow"));
+                } else {
+                    text.push_str(&format!(" · free requests {used}/{limit} today"));
+                }
+            }
             Ok(text)
         })();
         *state.lock().unwrap() = match result {
@@ -648,24 +673,24 @@ fn check_openrouter_key(key: String, state: Arc<std::sync::Mutex<KeyCheck>>, ctx
     });
 }
 
-fn fetch_free_models(state: Arc<std::sync::Mutex<FreeModels>>, ctx: egui::Context) {
+fn fetch_free_models(state: Arc<std::sync::Mutex<FreeModels>>, current: String, ctx: egui::Context) {
     std::thread::spawn(move || {
-        let result = (|| -> Result<Vec<String>, String> {
+        let result = (|| -> Result<(Vec<String>, bool), String> {
             let mut resp = ureq::get("https://openrouter.ai/api/v1/models").call().map_err(|e| e.to_string())?;
             let v: serde_json::Value = resp.body_mut().with_config().limit(32 << 20).read_json().map_err(|e| e.to_string())?;
-            let mut ids: Vec<String> = v["data"]
-                .as_array()
-                .ok_or("unexpected answer")?
+            let all = v["data"].as_array().ok_or("unexpected answer")?;
+            let current_ok = all.iter().any(|m| m["id"].as_str() == Some(current.as_str()));
+            let mut ids: Vec<String> = all
                 .iter()
                 .filter(|m| m["id"].as_str().is_some_and(|id| id.ends_with(":free")))
                 .filter(|m| m["architecture"]["input_modalities"].as_array().is_some_and(|a| a.iter().any(|x| x == "image")))
                 .filter_map(|m| m["id"].as_str().map(str::to_owned))
                 .collect();
             ids.sort();
-            Ok(ids)
+            Ok((ids, current_ok))
         })();
         *state.lock().unwrap() = match result {
-            Ok(ids) => FreeModels::Loaded(ids),
+            Ok((free, current_ok)) => FreeModels::Loaded { free, current_ok },
             Err(e) => FreeModels::Failed(e),
         };
         ctx.request_repaint();

@@ -48,12 +48,17 @@ Captions (stickers), clip ratings (top 5), looks (caricatures) and motion prompt
 ```
 LLM_PROVIDER=openrouter             # or opencode, or ollama
 OPENROUTER_API_KEY=sk-or-v1-...     # https://openrouter.ai/keys
-OPENROUTER_MODEL=qwen/qwen3.8-27b:free
-OPENROUTER_FALLBACKS=google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+OPENROUTER_MODEL=nvidia/nemotron-3.5-super-vl:free
+OPENROUTER_FALLBACKS=dots-studio/dots-3-note-preview:free,google/gemma-4-31b-it:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
 LLM_LOCAL_FALLBACK=1                # when every OpenRouter model fails: local OLLAMA_MODEL (qwen3-vl:4b)
 ```
 Free models are often rate limited; up to 3 fallbacks are tried in order, then the local model. OpenRouter needs no
 GPU memory, so ComfyUI keeps its models loaded between runs.
+OpenRouter retires free ids every few weeks: a dead id answers with `400 ... is not a valid model ID` (or `404 no
+longer available`), and `common/llm.py` then skips it and names the free vision models that still work in the error.
+Settings > OpenRouter lists them ("List free vision models") and warns when the saved id is gone. Free requests are
+capped per day (`free-models-per-day`, 50 without credits), after which every free model answers 429 until the next
+day - "Check key" shows how many are left.
 
 `LLM_PROVIDER=opencode` uses the free [OpenCode Zen](https://opencode.ai/zen) models without any key
 (default `OPENCODE_MODEL=opencode/deepseek-v4.1-flash-free`; `opencode/nemotron-3.5-super-vl-free` sees images, others e.g.

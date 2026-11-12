@@ -88,7 +88,7 @@ impl App {
                 let (_, model, _) = self.llama_config();
                 format!("{} via the llama.cpp router - start it above, it is unloaded after each run", llamacpp::display_name(&model))
             }
-            Provider::OpenRouter => format!("{} via OpenRouter", env("OPENROUTER_MODEL", "qwen/qwen3.8-27b:free")),
+            Provider::OpenRouter => format!("{} via OpenRouter", env("OPENROUTER_MODEL", super::DEFAULT_OPENROUTER_MODEL)),
         }
     }
 

@@ -91,7 +91,9 @@ pub enum FreeModels {
     #[default]
     NotLoaded,
     Loading,
-    Loaded(Vec<String>),
+    /// The free vision models OpenRouter still serves, plus whether the id in the field exists at all
+    /// (OpenRouter answers a dead id with 400 "not a valid model ID").
+    Loaded { free: Vec<String>, current_ok: bool },
     Failed(String),
 }
 
@@ -419,7 +421,7 @@ impl App {
             let llm = self.llm();
             let (icon, text) = match (llm.provider, &self.repo) {
                 (Provider::OpenRouter, Some(r)) => {
-                    (icons::CLOUD_OUTLINE, or_default(&r.env.get("OPENROUTER_MODEL"), "qwen/qwen3.8-27b:free"))
+                    (icons::CLOUD_OUTLINE, or_default(&r.env.get("OPENROUTER_MODEL"), DEFAULT_OPENROUTER_MODEL))
                 }
                 (Provider::OpenCode, Some(r)) => {
                     (icons::CLOUD_OUTLINE, or_default(&r.env.get("OPENCODE_MODEL"), "opencode/deepseek-v4.1-flash-free"))
@@ -647,6 +649,10 @@ pub fn mmss(d: Duration) -> String {
 pub fn or_default(value: &str, default: &str) -> String {
     if value.trim().is_empty() { default.to_owned() } else { value.trim().to_owned() }
 }
+
+/// Free OpenRouter vision model the flows fall back to (same default as `common/llm.py`). OpenRouter
+/// retires free ids every few weeks and answers a dead one with 400, so this is kept current.
+pub const DEFAULT_OPENROUTER_MODEL: &str = "nvidia/nemotron-3.5-super-vl:free";
 
 pub fn status_text(s: &Status) -> (icons::Icon, String, Color32) {
     match s {
